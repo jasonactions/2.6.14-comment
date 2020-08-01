@@ -90,19 +90,33 @@ extern int dir_notify_enable;
 /*
  * These are the fs-independent mount-flags: up to 32 flags are supported
  */
+/*文件只能被读*/
 #define MS_RDONLY	 1	/* Mount read-only */
+/*禁止setuid和setgid标志*/
 #define MS_NOSUID	 2	/* Ignore suid and sgid bits */
+/*禁止访问设备文件*/
 #define MS_NODEV	 4	/* Disallow access to device special files */
+/*不允许程序执行*/
 #define MS_NOEXEC	 8	/* Disallow program execution */
+/*文件和目录上的写操作是即时的*/
 #define MS_SYNCHRONOUS	16	/* Writes are synced at once */
+/*重新安装改变安装标志*/
 #define MS_REMOUNT	32	/* Alter flags of a mounted FS */
+/*允许强制加锁*/
 #define MS_MANDLOCK	64	/* Allow mandatory locks on an FS */
+/*目录上的写操作是即时的*/
 #define MS_DIRSYNC	128	/* Directory modifications are synchronous */
+/*不更新文件访问时间*/
 #define MS_NOATIME	1024	/* Do not update access times. */
+/*不更新目录访问时间*/
 #define MS_NODIRATIME	2048	/* Do not update directory access times */
+/*创建“绑定安装”，使得一个文件或目录在系统目录树的另外一个点可见*/
 #define MS_BIND		4096
+/*将一个已安装文件系统迁移到另一个安装点*/
 #define MS_MOVE		8192
+/*为目录子树递归创建“绑定安装”*/
 #define MS_REC		16384
+/*安装出错时产生内核消息*/
 #define MS_VERBOSE	32768
 #define MS_POSIXACL	(1<<16)	/* VFS does not apply the umask */
 #define MS_ACTIVE	(1<<30)
@@ -426,30 +440,49 @@ static inline int mapping_writably_mapped(struct address_space *mapping)
 #endif
 
 struct inode {
+	/*链入全局散列链表的连接件*/
 	struct hlist_node	i_hash;
+	/*链入到反应inode当前状态的链表的链接件*/
 	struct list_head	i_list;
+	/*链入到所属文件系统超级块的inode链表的链接件*/
 	struct list_head	i_sb_list;
+	/*引用这个inode的dentry链表的表头*/
 	struct list_head	i_dentry;
+	/*inode编号*/
 	unsigned long		i_ino;
+	/*使用计数*/
 	atomic_t		i_count;
+	/*文件类型和访问权限*/
 	umode_t			i_mode;
+	/*inode硬链接数*/
 	unsigned int		i_nlink;
+	/*创建该文件的用户id*/
 	uid_t			i_uid;
+	/*创建该文件的组id*/
 	gid_t			i_gid;
+	/*如果代表一个块设备或字符设备，则为设备号*/
 	dev_t			i_rdev;
-	/*文件大小，对于块设备文件则为块设备容量（单位 扇区，每个扇区大小512B）*/
+	/*文件大小（字节），对于块设备文件则为块设备容量（单位 扇区，每个扇区大小512B）*/
 	loff_t			i_size;
+	/*文件的最后访问时间*/
 	struct timespec		i_atime;
+	/*文件的最后修改时间*/
 	struct timespec		i_mtime;
+	/*inode的最后修改时间*/
 	struct timespec		i_ctime;
+	/*文件块长度的位数*/
 	unsigned int		i_blkbits;
 	unsigned long		i_blksize;
+	/*版本号，每次使用后递增*/
 	unsigned long		i_version;
+	/*文件的块数*/
 	unsigned long		i_blocks;
+	/*以512字节为单位，最后一个块的字节数*/
 	unsigned short          i_bytes;
 	spinlock_t		i_lock;	/* i_blocks, i_bytes, maybe i_size */
 	struct semaphore	i_sem;
 	struct rw_semaphore	i_alloc_sem;
+	/*指向inode操作表的指针*/
 	struct inode_operations	*i_op;
 	/*一般在创建文件时会赋值给file->f_ops*/
 	struct file_operations	*i_fop;	/* former ->i_op->default_file_ops */
@@ -460,17 +493,19 @@ struct inode {
 	 * 如果是块设备文件则指向bdev主inode的address_space对象
 	 */
 	struct address_space	*i_mapping;
+	/*文件的address_space对象*/
 	struct address_space	i_data;
 #ifdef CONFIG_QUOTA
 	struct dquot		*i_dquot[MAXQUOTAS];
 #endif
 	/* These three should probably be a union */
+	/*链入到块设备或字符设备的inode链表的链接件*/
 	struct list_head	i_devices;
 	struct pipe_inode_info	*i_pipe;
 	struct block_device	*i_bdev;
 	struct cdev		*i_cdev;
 	int			i_cindex;
-
+	/*inode版本号*/
 	__u32			i_generation;
 
 #ifdef CONFIG_DNOTIFY
@@ -482,13 +517,15 @@ struct inode {
 	struct list_head	inotify_watches; /* watches on this inode */
 	struct semaphore	inotify_sem;	/* protects the watches list */
 #endif
-
+	/*索引节点的状态标志*/
 	unsigned long		i_state;
 	unsigned long		dirtied_when;	/* jiffies of first dirtying */
-
+	
+	/*文件系统的安装标志*/
 	unsigned int		i_flags;
-
+	/*用于写进程的引用计数器*/
 	atomic_t		i_writecount;
+	/*指向索引节点安全结构的指针*/
 	void			*i_security;
 	union {
 		void		*generic_ip;
@@ -591,31 +628,47 @@ struct file {
 	 * fu_rcuhead for RCU freeing
 	 */
 	union {
+		/*链入所属文件系统超级块的链接件*/
 		struct list_head	fu_list;
 		struct rcu_head 	fu_rcuhead;
 	} f_u;
+	/*和文件关联的dentry*/
 	struct dentry		*f_dentry;
+	/*包含这个文件的已安装的文件系统*/
 	struct vfsmount         *f_vfsmnt;
+	/*指向文件操作表的指针*/
 	struct file_operations	*f_op;
+	/*引用计数*/
 	atomic_t		f_count;
+	/*打开文件时指定的标志位*/
 	unsigned int 		f_flags;
+	/*进程访问模式*/
 	mode_t			f_mode;
+	/*当前的文件位移量*/
 	loff_t			f_pos;
+	/*用于通过信号进行IO事件通知的数据*/
 	struct fown_struct	f_owner;
+	/*用户UID GID*/
 	unsigned int		f_uid, f_gid;
+	/*文件预读状态*/
 	struct file_ra_state	f_ra;
-
+	/*版本号，每次使用后自动递增*/
 	unsigned long		f_version;
+	/*指向文件对象安全结构的指针*/
 	void			*f_security;
 
 	/* needed for tty driver, and maybe others */
+	/*用户文件系统或谁驱动的私有指针*/
 	void			*private_data;
 
 #ifdef CONFIG_EPOLL
 	/* Used by fs/eventpoll.c to link all the hooks to this file */
+	/*这个文件的时间轮询等待者链表的表头，等待者通过epitem结构的flink域链入此链表*/
 	struct list_head	f_ep_links;
+	/*保护f_ep_links链表的自旋锁*/
 	spinlock_t		f_ep_lock;
 #endif /* #ifdef CONFIG_EPOLL */
+	/*指向文件地址空间的指针*/
 	struct address_space	*f_mapping;
 };
 extern spinlock_t files_lock;
@@ -774,25 +827,38 @@ extern spinlock_t sb_lock;
 #define sb_entry(list)	list_entry((list), struct super_block, s_list)
 #define S_BIAS (1<<30)
 struct super_block {
+	/*链接到全局sb链表的连接件*/
 	struct list_head	s_list;		/* Keep this first */
 	dev_t			s_dev;		/* search index; _not_ kdev_t */
 	unsigned long		s_blocksize;
 	unsigned long		s_old_blocksize;
 	unsigned char		s_blocksize_bits;
+	/*修改标志*/
 	unsigned char		s_dirt;
 	unsigned long long	s_maxbytes;	/* Max file size */
 	struct file_system_type	*s_type;
 	struct super_operations	*s_op;
+	/*磁盘限额处理方法*/
 	struct dquot_operations	*dq_op;
+	/*磁盘限额管理方法*/
  	struct quotactl_ops	*s_qcop;
+	/*网络文件系统使用的输出操作*/
 	struct export_operations *s_export_op;
+	/*安装标志*/
 	unsigned long		s_flags;
+	/*文件系统的魔数*/
 	unsigned long		s_magic;
+	/*文件系统根目录的目录项对象*/
 	struct dentry		*s_root;
+	/*卸载所用的信号量*/
 	struct rw_semaphore	s_umount;
+	/*超级块信号量*/
 	struct semaphore	s_lock;
+	/*引用计数器*/
 	int			s_count;
+	/*表示对超级块的索引节点进行同步的标志*/
 	int			s_syncing;
+	/*对超级块已安装文件系统进行同步的标志*/
 	int			s_need_sync_fs;
 	atomic_t		s_active;
 	void                    *s_security;
@@ -804,27 +870,33 @@ struct super_block {
 	/*集中了等待被传输到磁盘的inode节点*/
 	struct list_head	s_io;		/* parked for writeback */
 	struct hlist_head	s_anon;		/* anonymous dentries for (nfs) exporting */
+	/*文件对象的链表*/
 	struct list_head	s_files;
 
 	struct block_device	*s_bdev;
+	/*链入给定文件系统类型的超级块链表的连接件*/
 	struct list_head	s_instances;
 	struct quota_info	s_dquot;	/* Diskquota specific options */
 
+	/*冻结文件系统时使用的标志（强制一致性状态）*/
 	int			s_frozen;
 	wait_queue_head_t	s_wait_unfrozen;
 
 	char s_id[32];				/* Informational name */
 
+	/*指向特定文件系统的超级块的指针*/
 	void 			*s_fs_info;	/* Filesystem private info */
 
 	/*
 	 * The next field is for VFS *only*. No filesystems have any business
 	 * even looking at it. You had been warned.
 	 */
+	/*当vfs通过目录重命名文件时使用的信号量*/
 	struct semaphore s_vfs_rename_sem;	/* Kludge */
 
 	/* Granuality of c/m/atime in ns.
 	   Cannot be worse than a second */
+	/*时间戳的粒度*/
 	u32		   s_time_gran;
 };
 
@@ -1062,10 +1134,10 @@ struct super_operations {
 #define I_DIRTY_DATASYNC	2 /* Data-related inode changes pending */
 #define I_DIRTY_PAGES		4 /* Data-related inode changes pending */
 #define __I_LOCK		3
-#define I_LOCK			(1 << __I_LOCK)
-#define I_FREEING		16
-#define I_CLEAR			32
-#define I_NEW			64
+#define I_LOCK			(1 << __I_LOCK)/*索引节点对象处于IO传送中*/
+#define I_FREEING		16 /*索引节点对象正在被释放*/
+#define I_CLEAR			32 /*索引节点对象的内容不再有意义*/
+#define I_NEW			64 /*索引节点已分配，但还没有用磁盘索引节点来填充*/
 #define I_WILL_FREE		128
 
 #define I_DIRTY (I_DIRTY_SYNC | I_DIRTY_DATASYNC | I_DIRTY_PAGES)
@@ -1209,11 +1281,14 @@ find_exported_dentry(struct super_block *sb, void *obj, void *parent,
 struct file_system_type {
 	const char *name;
 	int fs_flags;
+	/*读超级块的方法*/
 	struct super_block *(*get_sb) (struct file_system_type *, int,
-				       const char *, void *);
+	/*删除超级块的方法*/			       const char *, void *);
 	void (*kill_sb) (struct super_block *);
 	struct module *owner;
+	/*指向文件系统链表的下一个元素*/
 	struct file_system_type * next;
+	/*具有相同文件系统类型的超级块对象链表的头*/
 	struct list_head fs_supers;
 };
 

@@ -432,6 +432,7 @@ static void wb_kupdate(unsigned long arg)
 			if (wbc.encountered_congestion)
 				blk_congestion_wait(WRITE, HZ/10);
 			else
+				/*将过去oldest_jif时间的脏数据都写完了*/
 				break;	/* All the old data is written */
 		}
 		nr_to_write -= MAX_WRITEBACK_PAGES - wbc.nr_to_write;
