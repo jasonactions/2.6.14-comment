@@ -1450,6 +1450,13 @@ EXPORT_SYMBOL(blk_remove_plug);
 /*
  * remove the plug and let it rip..
  */
+/*
+ * 泄流函数，触发泄流的时机：
+ * 
+ * 1.蓄流定时器q->unplug_timer时间到
+ * 2.超过q->unplug_thresh设定的蓄流阀值，如：在add_request时会进行检查
+ * 3.对于无需蓄流的设备，直接调用此函数执行泄流操作
+ */
 void __generic_unplug_device(request_queue_t *q)
 {
 	if (unlikely(test_bit(QUEUE_FLAG_STOPPED, &q->queue_flags)))
@@ -1457,7 +1464,7 @@ void __generic_unplug_device(request_queue_t *q)
 
 	if (!blk_remove_plug(q))
 		return;
-
+	/*将处理完派发队列中的所有request*/
 	q->request_fn(q);
 }
 EXPORT_SYMBOL(__generic_unplug_device);
@@ -1669,7 +1676,7 @@ request_queue_t *blk_alloc_queue_node(gfp_t gfp_mask, int node_id)
 		return NULL;
 
 	memset(q, 0, sizeof(*q));
-	/*初始化request_queue的unplug定时器*/
+	/*初始化request_queue的unplug定时器,用于泄流request queue*/
 	init_timer(&q->unplug_timer);
 	atomic_set(&q->refcnt, 1);
 	/*初始化request_queue下的bdi的unplug回调*/
@@ -1789,7 +1796,7 @@ static inline void blk_free_request(request_queue_t *q, struct request *rq)
 		elv_put_request(q, rq);
 	mempool_free(rq, q->rq.rq_pool);
 }
-
+/*为bio从request_queue->request_list的内存池申请一个request*/
 static inline struct request *
 blk_alloc_request(request_queue_t *q, int rw, struct bio *bio,
 		  int priv, gfp_t gfp_mask)
@@ -1947,6 +1954,7 @@ get_rq:
 
 	spin_unlock_irq(q->queue_lock);
 
+	/*为bio从request_queue->request_list的内存池申请一个request*/
 	rq = blk_alloc_request(q, rw, bio, priv, gfp_mask);
 	if (!rq) {
 		/*
@@ -2384,7 +2392,7 @@ EXPORT_SYMBOL(blkdev_issue_flush);
 static void drive_stat_acct(struct request *rq, int nr_sectors, int new_io)
 {
 	int rw = rq_data_dir(rq);
-
+	/*blk_fs_request表示是一个常规的fs读写请求*/
 	if (!blk_fs_request(rq) || !rq->rq_disk)
 		return;
 
@@ -2637,6 +2645,9 @@ void blk_attempt_remerge(request_queue_t *q, struct request *rq)
 
 EXPORT_SYMBOL(blk_attempt_remerge);
 
+/*
+ * 如果bio能与调度队列的某个request合并则进行合并，否则将bio转换为request放入到调度队列
+ */
 static int __make_request(request_queue_t *q, struct bio *bio)
 {
 	struct request *req;
@@ -2657,6 +2668,7 @@ static int __make_request(request_queue_t *q, struct bio *bio)
 	 * certain limit bounced to low memory (ie for highmem, or even
 	 * ISA dma in theory)
 	 */
+	/*创建回弹缓冲区?*/
 	blk_queue_bounce(q, &bio);
 
 	spin_lock_prefetch(q->queue_lock);
@@ -2668,24 +2680,30 @@ static int __make_request(request_queue_t *q, struct bio *bio)
 	}
 
 	spin_lock_irq(q->queue_lock);
-
+	
+	/*elv_queue_empty判断派发队列是否为空且没有等待的调度队列*/
 	if (unlikely(barrier) || elv_queue_empty(q))
 		goto get_rq;
-
+	/*
+	 * 通过调度器判断bio是否可以与调度队列中的一个request进行合并，返回是否可以“合并”的结果
+	 * 调度器只能判断request是否可以扩大，但是对于硬件的检查以及执行request与bio合并是在block层
+	 */
 	el_ret = elv_merge(q, &req, bio);
 	switch (el_ret) {
 		case ELEVATOR_BACK_MERGE:
 			BUG_ON(!rq_mergeable(req));
-
+			/*初始化为ll_back_merge_fn,将request与bio向后merge*/
 			if (!q->back_merge_fn(q, req, bio))
 				break;
-
+			/*将bio链接到requet的bio链表的尾端*/
 			req->biotail->bi_next = bio;
 			req->biotail = bio;
 			req->nr_sectors = req->hard_nr_sectors += nr_sectors;
 			req->ioprio = ioprio_best(req->ioprio, prio);
 			drive_stat_acct(req, nr_sectors, 0);
+			/*通过调度器取出下一个request，判断是否可以与req进行合并*/
 			if (!attempt_back_merge(q, req))
+				/*通过调度器执行合并*/
 				elv_merged_request(q, req);
 			goto out;
 
@@ -2718,7 +2736,8 @@ static int __make_request(request_queue_t *q, struct bio *bio)
 		default:
 			;
 	}
-
+	
+	/*如果bio无法与调度队列的request合并，则创建新的request加入调度队列*/
 get_rq:
 	/*
 	 * Grab a free request. This is might sleep but can not fail.
@@ -2761,10 +2780,14 @@ get_rq:
 	req->start_time = jiffies;
 
 	spin_lock_irq(q->queue_lock);
+	
+	/*执行“蓄流”*/
 	if (elv_queue_empty(q))
 		blk_plug_device(q);
+	/*将请求添加到调度队列*/
 	add_request(q, req);
 out:
+	/*如果是同步，则要立即执行“泄流”，在定时器时间到也会通过唤醒unplug_work线程执行泄流*/
 	if (sync)
 		__generic_unplug_device(q);
 
@@ -2779,17 +2802,19 @@ end_io:
 /*
  * If bio->bi_dev is a partition, remap the location
  */
+/*如果bdev代表一个分区，则需要重新映射bio的起始扇区*/
 static inline void blk_partition_remap(struct bio *bio)
 {
 	struct block_device *bdev = bio->bi_bdev;
 
+	/*判断一个bdev是否代表一个分区，如果相等则代表一个分区*/
 	if (bdev != bdev->bd_contains) {
 		struct hd_struct *p = bdev->bd_part;
 		const int rw = bio_data_dir(bio);
 
 		p->sectors[rw] += bio_sectors(bio);
 		p->ios[rw]++;
-
+		/*重新映射为整个磁盘的扇区位置，从此操作将基于整个磁盘*/
 		bio->bi_sector += p->start_sect;
 		bio->bi_bdev = bdev->bd_contains;
 	}
@@ -2894,8 +2919,10 @@ end_io:
 		 * If this device has partitions, remap block n
 		 * of partition p to block n+start(p) of the disk.
 		 */
+		/*如果bdev代表一个分区，则需要重新映射bio的起始扇区*/
 		blk_partition_remap(bio);
 
+		/*将bio插入到请求队列q(or 调度队列？)中,一般为__make_request*/
 		ret = q->make_request_fn(q, bio);
 	} while (ret);
 }
@@ -2914,6 +2941,7 @@ EXPORT_SYMBOL(generic_make_request);
  */
 void submit_bio(int rw, struct bio *bio)
 {
+	/*获取bio要传输的扇区数*/
 	int count = bio_sectors(bio);
 
 	BIO_BUG_ON(!bio->bi_size);

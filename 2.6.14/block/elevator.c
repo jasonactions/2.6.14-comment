@@ -251,7 +251,7 @@ int elv_merge(request_queue_t *q, struct request **req, struct bio *bio)
 {
 	elevator_t *e = q->elevator;
 	int ret;
-
+	/*优先合并上一次合并的request*/
 	if (q->last_merge) {
 		ret = elv_try_merge(q->last_merge, bio);
 		if (ret != ELEVATOR_NO_MERGE) {
@@ -513,10 +513,10 @@ void elv_dequeue_request(request_queue_t *q, struct request *rq)
 int elv_queue_empty(request_queue_t *q)
 {
 	elevator_t *e = q->elevator;
-
+	/*判断派发队列是否为空*/
 	if (!list_empty(&q->queue_head))
 		return 0;
-
+	/*以cfq为例,cfq_queue_empty返回!q->elevator->elevator_data->busy_queues*/
 	if (e->ops->elevator_queue_empty_fn)
 		return e->ops->elevator_queue_empty_fn(q);
 

@@ -110,8 +110,10 @@ static kmem_cache_t *cfq_ioc_pool;
 /*
  * Per block device queue structure
  */
+/*用于描述调度器*/
 struct cfq_data {
 	atomic_t ref;
+	/*指向块设备对应的派发队列*/
 	request_queue_t *queue;
 
 	/*
@@ -121,6 +123,7 @@ struct cfq_data {
 	struct list_head busy_rr;
 	struct list_head cur_rr;
 	struct list_head idle_rr;
+	/*用于计算service_tree中有多少个队列在等待调度*/
 	unsigned int busy_queues;
 
 	/*

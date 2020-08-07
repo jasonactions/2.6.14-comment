@@ -54,7 +54,10 @@
 /*
  * was unsigned short, but we might as well be ready for > 64kB I/O pages
  */
-/*一般一个bio_Vec对应一个page,除非bio剩余情况不足一个page*/
+/* 
+ * segment，段描述符，一个内存页或内存页中的一部分，他们包含一些相邻扇区中的数据
+ * 一般一个bio_Vec对应一个page
+ */
 struct bio_vec {
 	struct page	*bv_page;
 	unsigned int	bv_len;
@@ -74,8 +77,9 @@ typedef void (bio_destructor_t) (struct bio *);
  * bio将以扇区为单位进行操作?
  */
 struct bio {
-	/*对应块设备的扇区号,扇区大小为512B,此处暗示block层以扇区为单位`*/
+	/*块IO操作的第一个扇区,扇区大小为512B,此处暗示block层以扇区为单位`*/
 	sector_t		bi_sector;
+	/*链接到请求队列的下一个BIO*/
 	struct bio		*bi_next;	/* request queue link */
 	struct block_device	*bi_bdev;
 	unsigned long		bi_flags;	/* status, command, etc */
@@ -83,11 +87,17 @@ struct bio {
 						 * top bits priority
 						 */
 
+	/*bio_vec数组中包含的segments数目，可以理解为合并前的segments数目*/
 	unsigned short		bi_vcnt;	/* how many bio_vec's */
 	unsigned short		bi_idx;		/* current index into bvl_vec */
 
 	/* Number of segments in this BIO after
 	 * physical address coalescing is performed.
+	 */
+	/*
+	 * 如果不同的段在RAM中相应的页框正好是连续的并且磁盘上相应的数据段也是相邻的，
+	 * 那么通用块层可以合并他们，通过这种方式产生的更大的内存区就是物理段segment
+	 * 可以理解为合并后的segment数目
 	 */
 	unsigned short		bi_phys_segments;
 
@@ -95,7 +105,7 @@ struct bio {
 	 * hardware coalescing is performed.
 	 */
 	unsigned short		bi_hw_segments;
-	/*还没有传输的字节数*/
+	/*需要传输的字节数*/
 	unsigned int		bi_size;	/* residual I/O count */
 
 	/*
@@ -105,14 +115,14 @@ struct bio {
 	 */
 	unsigned int		bi_hw_front_size;
 	unsigned int		bi_hw_back_size;
-
+	/*允许的最大的segment的个数*/
 	unsigned int		bi_max_vecs;	/* max bvl_vecs we can hold */
 
 	struct bio_vec		*bi_io_vec;	/* the actual vec list */
 
 	bio_end_io_t		*bi_end_io;
 	atomic_t		bi_cnt;		/* pin count */
-	/*指向bh?*/
+	/*通用块层和块设备驱动层的I/O完成方法使用的指针*/
 	void			*bi_private;
 
 	bio_destructor_t	*bi_destructor;	/* destructor */

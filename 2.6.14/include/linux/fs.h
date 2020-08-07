@@ -375,19 +375,29 @@ struct block_device {
 	int			bd_openers;
 	struct semaphore	bd_sem;	/* open/close mutex */
 	struct semaphore	bd_mount_sem;	/* mount mutex */
+	/*这个块设备的次inode链表的表头*/
 	struct list_head	bd_inodes;
+	/*块设备描述符的当前所有者，可以指向某结构或字符串，通过该域实现共享式或排他式打开 */
 	void *			bd_holder;
+	/*统计对bd_holder字段多次设置的次数*/
 	int			bd_holders;
+	/*如果块设备代表一个分区，则它指向代表整个磁盘的块设备描述符，否则它指向自身*/
 	struct block_device *	bd_contains;
 	/*块设备的逻辑块长度，以字节为单位*/
 	unsigned		bd_block_size;
+	/*指向块设备代表的分区对象的指针，如果块设备代表磁盘，指向gendisk描述符的part0域*/
 	struct hd_struct *	bd_part;
 	/* number of times partitions within this device have been opened. */
+	/*
+	 * 如果块设备代表磁盘，则表示分区被打开的次数，非0则表示有分区在使用，不能重新扫描分区
+	 * 如果块设备代表一个分区，该域为0
+	 */
 	unsigned		bd_part_count;
 	/*如果置位，则需要重新读取分区表*/
 	int			bd_invalidated;
 	/*指向这个块设备所在磁盘的gendisk的指针*/
 	struct gendisk *	bd_disk;
+	/*链接到所有块设备链表all_bdevs的链接件*/
 	struct list_head	bd_list;
 	struct backing_dev_info *bd_inode_backing_dev_info;
 	/*
@@ -396,6 +406,7 @@ struct block_device {
 	 * the same device multiple times, the owner must take special
 	 * care to not mess up bd_private for that case.
 	 */
+	/*块设备持有者的私有数据，使用前必须调用bd_claim*/
 	unsigned long		bd_private;
 };
 
@@ -992,13 +1003,19 @@ int generic_osync_inode(struct inode *, struct address_space *, int);
 typedef int (*filldir_t)(void *, const char *, int, loff_t, ino_t, unsigned);
 
 struct block_device_operations {
+	/*打开块设备文件*/
 	int (*open) (struct inode *, struct file *);
+	/*关闭对块设备文件的最后一个引用*/
 	int (*release) (struct inode *, struct file *);
+	/*在块设备文件上发ioctl调用（使用大内核锁）*/
 	int (*ioctl) (struct inode *, struct file *, unsigned, unsigned long);
 	long (*unlocked_ioctl) (struct file *, unsigned, unsigned long);
+	/*在块设备文件上发ioctl调用（不使用大内核锁）*/
 	long (*compat_ioctl) (struct file *, unsigned, unsigned long);
 	int (*direct_access) (struct block_device *, sector_t, unsigned long *);
+	/*检查可移动介质是否已经变化*/
 	int (*media_changed) (struct gendisk *);
+	/*检查块设备是否持有有效数据*/
 	int (*revalidate_disk) (struct gendisk *);
 	struct module *owner;
 };

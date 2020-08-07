@@ -994,6 +994,7 @@ void bio_endio(struct bio *bio, unsigned int bytes_done, int error)
 		bytes_done = bio->bi_size;
 	}
 
+	/*更新bio剩余要传输的字节，以及下一次开始传输的扇区号*/
 	bio->bi_size -= bytes_done;
 	bio->bi_sector += (bytes_done >> 9);
 

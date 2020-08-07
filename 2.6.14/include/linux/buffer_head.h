@@ -51,6 +51,7 @@ typedef void (bh_end_io_t)(struct buffer_head *bh, int uptodate);
  * indexed addressing for it.
  */
 /*
+ * buffer_head就是用于描述page中的块缓冲区与磁盘扇区的对应关系
  * 一个page cache页内的所有块缓冲区大小必须相同
  * 在x86架构，根据块的大小，一个page cahce页可以包含1~8个buffer
  * page中的每个buffer对应一个块，所有buffer对应的块是连续的
@@ -66,14 +67,14 @@ struct buffer_head {
 	/*使用这个块的计数器*/
 	atomic_t b_count;		/* users using this block */
 	/* 
-	 * 块大小（可以是512~4096大小),块大小由上层传递下来的块大小决定
+	 * 块缓冲区大小（可以是512~4096大小),由上层传递下来的块大小决定
 	 * bh转换为bio时会统一以扇区大小为单位
-	 * 块在缓冲区页中的结束位置为b_data+b_size 
+	 * 块缓冲区在页中的结束位置为b_data+b_size 
 	 */
 	u32 b_size;			/* block size */
 	/*与块设备相关的逻辑块号,块大小由b_size表示*/
 	sector_t b_blocknr;		/* block number */
-	/*块在缓冲区页内的起始位置*/
+	/*如果页框位于高端内存，存放页中块缓冲区的偏移量，否则存放块缓冲区本身的起始线性地址*/
 	char *b_data;			/* pointer to data block */
 	struct block_device *b_bdev;
 	bh_end_io_t *b_end_io;		/* I/O completion */

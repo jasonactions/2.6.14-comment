@@ -103,12 +103,16 @@ void swap_io_context(struct io_context **ioc1, struct io_context **ioc2);
 
 struct request;
 typedef void (rq_end_io_fn)(struct request *);
-
+/*为解决重负载情况下，固定数目动态内存阻碍申请新的request*/
 struct request_list {
+	/*记录分配给READ/WRITE的request描述符数*/
 	int count[2];
+
 	int starved[2];
 	int elvpriv;
+	/*指向request描述符的内存池*/
 	mempool_t *rq_pool;
+	/*记录为了获取空闲的读/写request描述符而睡眠的进程*/
 	wait_queue_head_t wait[2];
 };
 
@@ -126,32 +130,45 @@ struct request {
 	/* Maintain bio traversal state for part by part I/O submission.
 	 * hard_* are block layer internals, no driver should touch them!
 	 */
-
+	/*下一个要传送的扇区号*/
 	sector_t sector;		/* next sector to submit */
+	/*整个request还需传送的扇区数*/
 	unsigned long nr_sectors;	/* no. of sectors left to submit */
 	/* no. of sectors left to submit in the current segment */
+	/*当前bio的当前segment(biovec)中还需传送的扇区数*/
 	unsigned int current_nr_sectors;
 
+	/*要传送的下一个扇区号?*/
 	sector_t hard_sector;		/* next sector to complete */
+	/*整个请求中还剩多少扇区没有传送?*/
 	unsigned long hard_nr_sectors;	/* no. of sectors left to complete */
 	/* no. of sectors left to complete in the current segment */
+	/*当前bio的当前段中要传送的扇区数?*/
 	unsigned int hard_cur_sectors;
 
+	/*请求中第一个没有完成传送到的bio*/
 	struct bio *bio;
+	/*请求链表中末尾的bio*/
 	struct bio *biotail;
 
+	/*指向IO调度器的私有数据*/
 	void *elevator_private;
 
 	unsigned short ioprio;
 
+	/*请求状态，或者是RQ_ACTIVE，或者是RQ_INACTIVE*/
 	int rq_status;	/* should split this into a few status bits */
+	/*请求所引用的磁盘描述符*/
 	struct gendisk *rq_disk;
+	/*用于记录当前传送中发生的IO失败次数的计数器*/
 	int errors;
+	/*请求的起始时间*/
 	unsigned long start_time;
 
 	/* Number of scatter-gather DMA addr+len pairs after
 	 * physical address coalescing is performed.
 	 */
+	/*请求在物理内存中占据的不连续的物理段数，聚散列表的尺寸*/
 	unsigned short nr_phys_segments;
 
 	/* Number of scatter-gather addr+len pairs after
@@ -159,30 +176,44 @@ struct request {
 	 * This is the number of scatter-gather entries the driver
 	 * will actually have to deal with after DMA mapping is done.
 	 */
+	/*请求的硬段数*/
 	unsigned short nr_hw_segments;
 
+	/*与请求相关的标记（只适合支持多次数据传送的硬件设备）*/
 	int tag;
+	/*指向当前数据传送的内存缓冲区（如果缓冲区为高端内存，则为NULL）*/
 	char *buffer;
 
+	/*请求引用计数器*/
 	int ref_count;
+	/*指向包含请求的请求队列描述符的指针*/
 	request_queue_t *q;
 	struct request_list *rl;
-
+	
+	/*等待数据传送终止*/
 	struct completion *waiting;
+	/*对硬件发出特殊请求命令*/
 	void *special;
 
 	/*
 	 * when request is used as a packet command carrier
 	 */
+	/*cmd字段中命令的长度*/
 	unsigned int cmd_len;
+	/*由请求队列的prep_rq_fn方法准备好的预先内置命令所在的缓冲区*/
 	unsigned char cmd[BLK_MAX_CDB];
-
+	
+	/*通常由data字段指向的缓冲区中数据的长度*/
 	unsigned int data_len;
+	/*设备驱动程序为了跟踪所传输的数据采用的指针*/
 	void *data;
 
+	/*由sense字段指向的缓冲区长度*/
 	unsigned int sense_len;
+	/*指向输出sense命令的缓冲区的指针*/
 	void *sense;
 
+	/*请求的超时时间*/
 	unsigned int timeout;
 
 	/*
@@ -314,24 +345,38 @@ struct request_queue
 	/*
 	 * Together with queue_head for cacheline sharing
 	 */
+	/*待处理请求的链表*/
 	struct list_head	queue_head;
+	/*指向队列中首先可能合并的请求描述符*/
 	struct request		*last_merge;
+	/*指向调度器的指针*/
 	elevator_t		*elevator;
 
 	/*
 	 * the queue request freelist, one for reads and one for writes
 	 */
+	/*为分配请求描述符所使用的数据结构*/
 	struct request_list	rq;
 
+	/*实现驱动程序的策略回调*/
 	request_fn_proc		*request_fn;
+	/*检查是否可以将bio合并到请求队列的最后一个请求中的方法*/
 	merge_request_fn	*back_merge_fn;
+	/*查是否可以将bio合并到请求队列的第一个请求中的方法*/
 	merge_request_fn	*front_merge_fn;
+	/*试图合并请求队列中两个相邻请求的方法*/
 	merge_requests_fn	*merge_requests_fn;
+	/*将一个新请求插入到请求对中调用的方法*/
 	make_request_fn		*make_request_fn;
+	/*把处理请求的命令发给硬件设备*/
 	prep_rq_fn		*prep_rq_fn;
+	/*泄流的方法*/
 	unplug_fn		*unplug_fn;
+	/*当增加一个新的segment,该方法返回可插入到某个已存在的bio结构中的字节数(通常未定义)*/
 	merge_bvec_fn		*merge_bvec_fn;
+	/*将某个请求加入请求队列时调用的方法*/
 	activity_fn		*activity_fn;
+	/*刷新请求队列时调用的方法(通过连续处理所有请求清空队列)*/
 	issue_flush_fn		*issue_flush_fn;
 	prepare_flush_fn	*prepare_flush_fn;
 	end_flush_fn		*end_flush_fn;
@@ -345,9 +390,13 @@ struct request_queue
 	/*
 	 * Auto-unplugging state
 	 */
+	/*泄流定时器*/
 	struct timer_list	unplug_timer;
+	/*请求队列请求泄流阀值*/
 	int			unplug_thresh;	/* After this many requests */
+	/*泄流定时器延迟时间*/
 	unsigned long		unplug_delay;	/* After this many jiffies */
+	/*泄流work*/
 	struct work_struct	unplug_work;
 
 	struct backing_dev_info	backing_dev_info;
@@ -356,19 +405,23 @@ struct request_queue
 	 * The queue owner gets to use this for whatever they like.
 	 * ll_rw_blk doesn't touch it.
 	 */
+	/*指向块设备驱动程序私有数据*/
 	void			*queuedata;
-
+	/*activity_fn方法使用的参数*/
 	void			*activity_data;
 
 	/*
 	 * queue needs bounce pages for pages above this limit
 	 */
+	/*大于该页框号时必须使用缓冲区回弹？？？*/
 	unsigned long		bounce_pfn;
+	/*回弹缓冲区内存分配标志*/ 
 	gfp_t			bounce_gfp;
 
 	/*
 	 * various queue flags, see QUEUE_* below
 	 */
+	/*描述请求队列状态的标志*/
 	unsigned long		queue_flags;
 
 	/*
@@ -376,6 +429,7 @@ struct request_queue
 	 * _never_ be used directly, it is queue private. always use
 	 * ->queue_lock.
 	 */
+	/*指向请求队列锁和锁的指针*/
 	spinlock_t		__queue_lock;
 	spinlock_t		*queue_lock;
 
@@ -387,31 +441,48 @@ struct request_queue
 	/*
 	 * queue settings
 	 */
+	/*
+	 * 请求队列中允许的最大请求数,缺省128个读请求和128个写请求
+	 * 如果待处理请求超过超过nr_requests，则将提交请求的可阻塞进程放到request_list结构对应的等待队列中睡眠
+	 */
 	unsigned long		nr_requests;	/* Max # of requests */
+	/*如果待处理请求超过该阀值，则认为该队列是拥挤的*/
 	unsigned int		nr_congestion_on;
+	/*如果待处理请求不超过该阀值，则认为该队列不是拥挤的*/
 	unsigned int		nr_congestion_off;
+	/*即使队列已满，仍可以由特殊进程"bacher"提交的待处理请求的最大值(通常为32)*/
 	unsigned int		nr_batching;
 
+	/*单个请求所能处理的最大扇区数（可调的）*/
 	unsigned short		max_sectors;
+	/*单个请求所能处理的最大扇区数（硬约束）*/
 	unsigned short		max_hw_sectors;
+	/*单个请求所能处理的最大物理段数（非内存段数，bio_vec合并后的）*/
 	unsigned short		max_phys_segments;
+	/*单个请求所能处理的最大硬件段数（分散-聚集DMA操作中的最大不同内存区数）*/
 	unsigned short		max_hw_segments;
+	/*扇区中以字节为单位的大小*/
 	unsigned short		hardsect_size;
+	/*物理段的最大长度（合并的连续内存段的大小）*/
 	unsigned int		max_segment_size;
-
+	/*段合并的内存边界屏蔽字？？*/
 	unsigned long		seg_boundary_mask;
+	/*DMA缓冲区的起始地址和长度的对齐位图（缺省511）*/
 	unsigned int		dma_alignment;
 
+	/*空闲/忙标记位图*/
 	struct blk_queue_tag	*queue_tags;
-
+	/*请求队列的引用计数器*/
 	atomic_t		refcnt;
-
+	/*请求队列中待处理请求数*/
 	unsigned int		in_flight;
 
 	/*
 	 * sg stuff
 	 */
+	/*用户定义的命令超时（仅有SCSI通用块设备使用）*/
 	unsigned int		sg_timeout;
+	/*基本未用*/
 	unsigned int		sg_reserved_size;
 	int			node;
 

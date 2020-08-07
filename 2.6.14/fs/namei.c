@@ -1840,6 +1840,13 @@ fail:
 }
 EXPORT_SYMBOL_GPL(lookup_create);
 
+/*
+ * @dir: 设备节点父目录对应的inode
+ * @dentry: 设备节点文件最后一级分量的dentry
+ * @mode:
+ * @dev: 设备文件的设备号 
+ * 创建设备节点
+ */
 int vfs_mknod(struct inode *dir, struct dentry *dentry, int mode, dev_t dev)
 {
 	int error = may_create(dir, dentry, NULL);
@@ -1858,12 +1865,16 @@ int vfs_mknod(struct inode *dir, struct dentry *dentry, int mode, dev_t dev)
 		return error;
 
 	DQUOT_INIT(dir);
+	/*
+	 * 调用具体文件系统的mknod，来创建设备节点文件的inode，并初始化其i_op和f_ops
+	 * 对于块设备节点一般inode->f_ops会初始化为def_blk_fops
+	 */
 	error = dir->i_op->mknod(dir, dentry, mode, dev);
 	if (!error)
 		fsnotify_create(dir, dentry->d_name.name);
 	return error;
 }
-
+/*创建设备节点*/
 asmlinkage long sys_mknod(const char __user * filename, int mode, unsigned dev)
 {
 	int error = 0;
@@ -1877,9 +1888,12 @@ asmlinkage long sys_mknod(const char __user * filename, int mode, unsigned dev)
 	if (IS_ERR(tmp))
 		return PTR_ERR(tmp);
 
+	/*将文件路径名的倒数第二级分量的dentry和文件系统实例转换为nameidata*/
 	error = path_lookup(tmp, LOOKUP_PARENT, &nd);
 	if (error)
 		goto out;
+
+	/*查询最后一级分量的dentry是否存在，如果不存在则创建*/
 	dentry = lookup_create(&nd, 0);
 	error = PTR_ERR(dentry);
 
@@ -1887,9 +1901,11 @@ asmlinkage long sys_mknod(const char __user * filename, int mode, unsigned dev)
 		mode &= ~current->fs->umask;
 	if (!IS_ERR(dentry)) {
 		switch (mode & S_IFMT) {
+		/*如果是普通文件*/
 		case 0: case S_IFREG:
 			error = vfs_create(nd.dentry->d_inode,dentry,mode,&nd);
 			break;
+		/*如果是字符设备或者是块设备*/
 		case S_IFCHR: case S_IFBLK:
 			error = vfs_mknod(nd.dentry->d_inode,dentry,mode,
 					new_decode_dev(dev));
