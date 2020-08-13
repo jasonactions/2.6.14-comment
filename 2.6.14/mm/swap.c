@@ -381,6 +381,12 @@ unsigned pagevec_lookup(struct pagevec *pvec, struct address_space *mapping,
 	return pagevec_count(pvec);
 }
 
+/*
+ * 从索引为index的page开始查找nr_pages个page，对有tag标记的page存放在pvec->pages中，
+ * 同时更新下一次查找的page索引index为本次查找到的最后一个page->index+1
+ *
+ * @return: 查找到具有tag标记的page的数量
+ */
 unsigned pagevec_lookup_tag(struct pagevec *pvec, struct address_space *mapping,
 		pgoff_t *index, int tag, unsigned nr_pages)
 {

@@ -520,6 +520,7 @@ static void free_more_memory(void)
  * I/O completion handler for block_read_full_page() - pages
  * which come unlocked at the end of I/O.
  */
+/*buffer_head的completion回调*/
 static void end_buffer_async_read(struct buffer_head *bh, int uptodate)
 {
 	unsigned long flags;
@@ -551,6 +552,7 @@ static void end_buffer_async_read(struct buffer_head *bh, int uptodate)
 	clear_buffer_async_read(bh);
 	unlock_buffer(bh);
 	tmp = bh;
+	/*遍历page中所有的buffer是否是最新*/
 	do {
 		if (!buffer_uptodate(tmp))
 			page_uptodate = 0;
@@ -567,8 +569,10 @@ static void end_buffer_async_read(struct buffer_head *bh, int uptodate)
 	 * If none of the buffers had errors and they are all
 	 * uptodate then we can set the page uptodate.
 	 */
+	/*如果page中所有的buffer都是最新则page设置为最新*/
 	if (page_uptodate && !PageError(page))
 		SetPageUptodate(page);
+	/*解锁页面唤醒等待页面的进程*/
 	unlock_page(page);
 	return;
 
@@ -1700,6 +1704,7 @@ int do_invalidatepage(struct page *page, unsigned long offset)
  * __set_page_dirty_buffers() via private_lock.  try_to_free_buffers
  * is already excluded via the page lock.
  */
+/*根据块大小blocksize，在page上创建buffer和bh,并对每个bh初始化*/
 void create_empty_buffers(struct page *page,
 			unsigned long blocksize, unsigned long b_state)
 {
@@ -1746,6 +1751,7 @@ EXPORT_SYMBOL(create_empty_buffers);
  * wait on that I/O in bforget() - it's more efficient to wait on the I/O
  * only if we really need to.  That happens here.
  */
+/*检查块设备缓冲区buffer cache是否包含同一个逻辑块号的buffer,如果有的话，写入磁盘后释放bh*/
 void unmap_underlying_metadata(struct block_device *bdev, sector_t block)
 {
 	struct buffer_head *old_bh;
@@ -1755,6 +1761,7 @@ void unmap_underlying_metadata(struct block_device *bdev, sector_t block)
 	old_bh = __find_get_block_slow(bdev, block, 0);
 	if (old_bh) {
 		clear_buffer_dirty(old_bh);
+		/*等待旧块写入完毕*/
 		wait_on_buffer(old_bh);
 		clear_buffer_req(old_bh);
 		__brelse(old_bh);
@@ -1953,7 +1960,7 @@ recover:
 	} while (bh != head);
 	goto done;
 }
-
+/*为page准备bh*/
 static int __block_prepare_write(struct inode *inode, struct page *page,
 		unsigned from, unsigned to, get_block_t *get_block)
 {
@@ -1969,15 +1976,18 @@ static int __block_prepare_write(struct inode *inode, struct page *page,
 	BUG_ON(from > to);
 
 	blocksize = 1 << inode->i_blkbits;
+	/*判断page是否是一个缓冲区页，如果不是则为之创建buffer*/
 	if (!page_has_buffers(page))
 		create_empty_buffers(page, blocksize, 0);
 	head = page_buffers(page);
 
 	bbits = inode->i_blkbits;
 	block = (sector_t)page->index << (PAGE_CACHE_SHIFT - bbits);
-
+	
+	/*遍历page的每一个bh*/
 	for(bh = head, block_start = 0; bh != head || !block_start;
 	    block++, block_start=block_end, bh = bh->b_this_page) {
+
 		block_end = block_start + blocksize;
 		if (block_end <= from || block_start >= to) {
 			if (PageUptodate(page)) {
@@ -1989,10 +1999,13 @@ static int __block_prepare_write(struct inode *inode, struct page *page,
 		if (buffer_new(bh))
 			clear_buffer_new(bh);
 		if (!buffer_mapped(bh)) {
+			/*通过get_block回调获取文件块号block对应的磁盘逻辑块号，保存在bh->b_blocknr*/
 			err = get_block(inode, block, bh, 1);
 			if (err)
 				break;
+			/*如果bh->b_blocknr是通过get_block分配的一个新块则置位BH_new*/
 			if (buffer_new(bh)) {
+				/*检查块设备缓冲区buffer cache是否包含同一个逻辑块号的buffer,如果有的话，写入磁盘后释放bh*/
 				unmap_underlying_metadata(bh->b_bdev,
 							bh->b_blocknr);
 				if (PageUptodate(page)) {
@@ -2020,8 +2033,10 @@ static int __block_prepare_write(struct inode *inode, struct page *page,
 				set_buffer_uptodate(bh);
 			continue; 
 		}
+		/*buffer无有效镜像数据，但是磁盘文件系统数据结构中已分配了块*/
 		if (!buffer_uptodate(bh) && !buffer_delay(bh) &&
 		     (block_start < from || block_end > to)) {
+			/*从磁盘中读取块到buffer*/
 			ll_rw_block(READ, 1, &bh);
 			*wait_bh++=bh;
 		}
@@ -2030,6 +2045,7 @@ static int __block_prepare_write(struct inode *inode, struct page *page,
 	 * If we issued read requests - let them complete.
 	 */
 	while(wait_bh > wait) {
+		/*等待bh读取完成*/
 		wait_on_buffer(*--wait_bh);
 		if (!buffer_uptodate(*wait_bh))
 			err = -EIO;
@@ -2087,6 +2103,7 @@ static int __block_commit_write(struct inode *inode, struct page *page,
 	    bh != head || !block_start;
 	    block_start=block_end, bh = bh->b_this_page) {
 		block_end = block_start + blocksize;
+		/*???*/
 		if (block_end <= from || block_start >= to) {
 			if (!buffer_uptodate(bh))
 				partial = 1;
@@ -2114,8 +2131,15 @@ static int __block_commit_write(struct inode *inode, struct page *page,
  * set/clear_buffer_uptodate() functions propagate buffer state into the
  * page struct once IO has completed.
  */
+/*
+ * 以一次读一个buffer块的方式读取块设备一页的数据
+ *
+ * @page: 对应buffer cache中的page页
+ * @get_block:用于从块设备文件按获取page中buffer对应的逻辑块号，初始化bh
+ */
 int block_read_full_page(struct page *page, get_block_t *get_block)
 {
+	/*此处为page位于buffer cache, inode为bdev->bd_inode*/
 	struct inode *inode = page->mapping->host;
 	sector_t iblock, lblock;
 	struct buffer_head *bh, *head, *arr[MAX_BUF_PER_PAGE];
@@ -2124,32 +2148,51 @@ int block_read_full_page(struct page *page, get_block_t *get_block)
 	int fully_mapped = 1;
 
 	BUG_ON(!PageLocked(page));
+	/*获取文件块大小*/
 	blocksize = 1 << inode->i_blkbits;
+	/*如果没有为page创建buffer则创建*/
 	if (!page_has_buffers(page))
 		create_empty_buffers(page, blocksize, 0);
+	/*获取page的第一个buffer_head指针*/
 	head = page_buffers(page);
 
+	/*索引为index的page的第一个文件块号*/
 	iblock = (sector_t)page->index << (PAGE_CACHE_SHIFT - inode->i_blkbits);
+	/*块设备的最后一个文件块号*/
 	lblock = (i_size_read(inode)+blocksize-1) >> inode->i_blkbits;
 	bh = head;
 	nr = 0;
 	i = 0;
 
 	do {
+		/*如果buffer已经最新，则跳过该buffer继续该page的下一个buffer*/
 		if (buffer_uptodate(bh))
 			continue;
 
+		/*如果当前文件块号没有映射到磁盘逻辑块号*/
 		if (!buffer_mapped(bh)) {
 			int err = 0;
 
+			/*表示文件块号没有完全映射到磁盘逻辑块*/
 			fully_mapped = 0;
+			/*如果当前文件块号小于最后一个文件块号*/
 			if (iblock < lblock) {
+				/*
+				 * 获取当前文件块号对应的逻辑块号,保存到bh->b_blocknr中
+				 * 对于普通文件在具体文件系统的磁盘数据结构中查找
+				 * 对于块设备文件，把文件块号当做逻辑快号
+				 */
 				err = get_block(inode, iblock, bh, 0);
 				if (err)
 					SetPageError(page);
 			}
+			/*
+			 * 如果当前文件按块号超过了最后一个文件块号
+			 * 即没有对应的逻辑磁盘块,将page对应的buffer清零
+			 */
 			if (!buffer_mapped(bh)) {
 				void *kaddr = kmap_atomic(page, KM_USER0);
+				/*将page对应的buffer清零*/
 				memset(kaddr + i * blocksize, 0, blocksize);
 				flush_dcache_page(page);
 				kunmap_atomic(kaddr, KM_USER0);
@@ -2161,15 +2204,19 @@ int block_read_full_page(struct page *page, get_block_t *get_block)
 			 * get_block() might have updated the buffer
 			 * synchronously
 			 */
+			/*依赖文件系统的get_block可能已经将磁盘块读到buffer中，因此检查是否最新*/
 			if (buffer_uptodate(bh))
 				continue;
 		}
+		/*保存bh表示其对应的buffer不是最新的*/
 		arr[nr++] = bh;
 	} while (i++, iblock++, (bh = bh->b_this_page) != head);
 
+	/*如果没有遇到文件空洞*/
 	if (fully_mapped)
 		SetPageMappedToDisk(page);
 
+	/*如果arr数组为空，说明bh中的buffer都是最新的,unlock page*/
 	if (!nr) {
 		/*
 		 * All buffers are uptodate - we can set the page uptodate
@@ -2182,9 +2229,14 @@ int block_read_full_page(struct page *page, get_block_t *get_block)
 	}
 
 	/* Stage two: lock the buffers */
+	/*如果arr数组为非空，说明bh中的buffer不是最新的,lock buffer*/
 	for (i = 0; i < nr; i++) {
 		bh = arr[i];
 		lock_buffer(bh);
+		/*
+		 * 设置bh的回调bh->b_end_io为end_buffer_async_read
+		 * end_buffer_async_read会
+		 */
 		mark_buffer_async_read(bh);
 	}
 
@@ -2195,9 +2247,11 @@ int block_read_full_page(struct page *page, get_block_t *get_block)
 	 */
 	for (i = 0; i < nr; i++) {
 		bh = arr[i];
+		/*如果已经是最新*/
 		if (buffer_uptodate(bh))
 			end_buffer_async_read(bh, 1);
 		else
+			/*如果不是最新则提交给块设备处理*/
 			submit_bh(READ, bh);
 	}
 	return 0;
@@ -2334,17 +2388,22 @@ out_unmap:
 out:
 	return status;
 }
-
+/*prepare_write回调的通用处理函数*/
 int block_prepare_write(struct page *page, unsigned from, unsigned to,
 			get_block_t *get_block)
 {
 	struct inode *inode = page->mapping->host;
+	/*为page准备bh*/
 	int err = __block_prepare_write(inode, page, from, to, get_block);
 	if (err)
 		ClearPageUptodate(page);
 	return err;
 }
-
+/*
+ * 实际会将page的buffer标记为dirty，等待写回磁盘
+ * @from: 文件写入的起始位置
+ * @to: 文件写入的结束位置
+ */
 int block_commit_write(struct page *page, unsigned from, unsigned to)
 {
 	struct inode *inode = page->mapping->host;

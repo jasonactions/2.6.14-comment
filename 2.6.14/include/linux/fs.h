@@ -352,6 +352,7 @@ struct address_space {
 	spinlock_t		i_mmap_lock;	/* protect tree, count, list */
 	unsigned int		truncate_count;	/* Cover race condition with truncate */
 	unsigned long		nrpages;	/* number of total pages */
+	/*上一个写回操作的最后一页*/
 	pgoff_t			writeback_index;/* writeback starts here */
 	struct address_space_operations *a_ops;	/* methods */
 	unsigned long		flags;		/* error bits/gfp mask */
@@ -473,7 +474,10 @@ struct inode {
 	gid_t			i_gid;
 	/*如果代表一个块设备或字符设备，则为设备号*/
 	dev_t			i_rdev;
-	/*文件大小（字节），对于块设备文件则为块设备容量（单位 扇区，每个扇区大小512B）*/
+	/* 
+	 * 文件大小（字节），包含了空洞，程序所看到的文件大小
+	 * 对于块设备文件则为块设备容量
+	 */
 	loff_t			i_size;
 	/*文件的最后访问时间*/
 	struct timespec		i_atime;
@@ -486,7 +490,7 @@ struct inode {
 	unsigned long		i_blksize;
 	/*版本号，每次使用后递增*/
 	unsigned long		i_version;
-	/*文件的块数*/
+	/*分配给文件的有效块数(块大小为512字节)*/
 	unsigned long		i_blocks;
 	/*以512字节为单位，最后一个块的字节数*/
 	unsigned short          i_bytes;
@@ -619,18 +623,34 @@ struct fown_struct {
  * Track a single file's readahead state
  */
 struct file_ra_state {
+	/*当前窗内第一页的索引*/
 	unsigned long start;		/* Current window */
+	/*当前窗内的页数（当临时禁止预读时为-1,0表示当前窗空）*/
 	unsigned long size;
+	/*控制预读的一些标志,重要标志如RA_FLAG_MISS和RA_FLAG_INCACHE*/
 	unsigned long flags;		/* ra flags RA_FLAG_xxx*/
+	/*连续高速缓存命中数（进程请求的页同时又在页高速缓存内）*/
 	unsigned long cache_hit;	/* cache hit count*/
+	/*进程上一次读操作中所请求页的最后一页的索引,初值是-1*/
 	unsigned long prev_page;	/* Cache last read() position */
+	/*预读窗内第一页的索引*/
 	unsigned long ahead_start;	/* Ahead window */
+	/*预读窗的页数（0表示预读窗口空）*/
 	unsigned long ahead_size;
+	/*
+	 * 预读窗的最大页数（0表示预读窗永久禁止),对该文件允许最大预读量
+	 * 缺省的初始值存放在文件所在块设备的blocking_dev_info描述符中
+	 * 应用可以通过posix_fadvise()修改此值来调整预读算法
+	 */
 	unsigned long ra_pages;		/* Maximum readahead window */
+	/*预读命中计数器（用于内存映射文件）*/
 	unsigned long mmap_hit;		/* Cache hit stat for mmap accesses */
+	/*预读失败计数器（用于内存映射文件）*/
 	unsigned long mmap_miss;	/* Cache miss stat for mmap accesses */
 };
+/*如果已被预读的页不在缓存中（可能由于内存回收）*/
 #define RA_FLAG_MISS 0x01	/* a cache miss occured against this file */
+/*当内核确定进程请求的最后256页都在页高速缓存内*/
 #define RA_FLAG_INCACHE 0x02	/* file is already in cache */
 
 struct file {
@@ -1029,10 +1049,14 @@ struct block_device_operations {
  * The simplest case just copies the data to user
  * mode.
  */
+/*读操作描述符，它存放与单个用户态缓冲相关的文件读操作的当前状态*/
 typedef struct {
+	/*已经拷贝到用户缓冲区的字节数*/
 	size_t written;
+	/*待传送的字节数*/
 	size_t count;
 	union {
+		/*用户态缓冲区当前位置*/
 		char __user * buf;
 		void *data;
 	} arg;

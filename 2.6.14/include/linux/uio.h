@@ -16,7 +16,8 @@
 
 /* A word of warning: Our uio structure will clash with the C library one (which is now obsolete). Remove the C
    library one from sys/uio.h if you have a very old library set */
-
+/*用于存放用户缓冲区的地址和长度,用于存放待读文件中的数据*/
+/*1003.1g: 一个关于协议独立接口的标准，该接口可以使一个应用程序通过网络与另一个应用程序通讯。 1996 年，IEEE 通过了这个标准*/
 struct iovec
 {
 	void __user *iov_base;	/* BSD uses caddr_t (1003.1g requires void *) */

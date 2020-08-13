@@ -115,6 +115,7 @@ static int
 blkdev_get_block(struct inode *inode, sector_t iblock,
 		struct buffer_head *bh, int create)
 {
+	/*如果当前的块号超过了逻辑磁盘的最后一个快号*/
 	if (iblock >= max_block(I_BDEV(inode))) {
 		if (create)
 			return -EIO;
@@ -129,6 +130,7 @@ blkdev_get_block(struct inode *inode, sector_t iblock,
 	}
 	bh->b_bdev = I_BDEV(inode);
 	bh->b_blocknr = iblock;
+	/*表明bh的b_bdev和b_blocknr是有效的*/
 	set_buffer_mapped(bh);
 	return 0;
 }
@@ -176,6 +178,7 @@ static int blkdev_writepage(struct page *page, struct writeback_control *wbc)
 	return block_write_full_page(page, blkdev_get_block, wbc);
 }
 
+/*块设备文件的readpage方法，所有块设备文件的readpage方法都是相同的*/
 static int blkdev_readpage(struct file * file, struct page * page)
 {
 	return block_read_full_page(page, blkdev_get_block);

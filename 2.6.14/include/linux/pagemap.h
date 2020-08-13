@@ -151,11 +151,13 @@ static inline loff_t page_offset(struct page *page)
 {
 	return ((loff_t)page->index) << PAGE_CACHE_SHIFT;
 }
-
+/*获取线性地址address对应映射文件中偏移页数*/
 static inline pgoff_t linear_page_index(struct vm_area_struct *vma,
 					unsigned long address)
 {
+	/*获取线性地址address相对于线性区起始地址vm_start的偏移*/
 	pgoff_t pgoff = (address - vma->vm_start) >> PAGE_SHIFT;
+	/*vm_pgoff为vm_start对应映射文件的页偏移*/
 	pgoff += vma->vm_pgoff;
 	return pgoff >> (PAGE_CACHE_SHIFT - PAGE_SHIFT);
 }

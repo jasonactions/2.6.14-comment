@@ -54,8 +54,15 @@ extern int sysctl_legacy_va_layout;
  * space that has a special rule for the page-fault handlers (ie a shared
  * library, the executable area etc).
  */
+/* mfile_start     vm_start address       vm_end    mfile_end
+ *    +---------------+--------+-------------+--------+
+ *    |               |        |             |        |    
+ *    +-----------------------------------------------+
+ *    |<--vm_offset-->|
+ */
 struct vm_area_struct {
 	struct mm_struct * vm_mm;	/* The address space we belong to. */
+	/*对于内存映射vm_start和vm_end表示映射文件的长度,也是线性区的大小*/
 	unsigned long vm_start;		/* Our start address within vm_mm. */
 	unsigned long vm_end;		/* The first byte after our end address
 					   within vm_mm. */
@@ -97,8 +104,10 @@ struct vm_area_struct {
 	struct vm_operations_struct * vm_ops;
 
 	/* Information about our backing store: */
+	/*内存映射文件的第一个映射单元的位置,以页大小为单位*/
 	unsigned long vm_pgoff;		/* Offset (within vm_file) in PAGE_SIZE
 					   units, *not* PAGE_CACHE_SIZE */
+	/*指向所映射文件的文件对象*/
 	struct file * vm_file;		/* File we map to (can be NULL). */
 	void * vm_private_data;		/* was vm_pte (shared mem) */
 	unsigned long vm_truncate_count;/* truncate_count or restart_addr */

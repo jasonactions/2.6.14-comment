@@ -210,7 +210,8 @@ static void balance_dirty_pages(struct address_space *mapping)
 			.older_than_this = NULL,
 			.nr_to_write	= write_chunk,
 		};
-
+		
+		/*获取后台线程开始回收的脏页面数background_thresh和应该堵住进程并开始回收的脏页面数dirty_thresh*/
 		get_dirty_limits(&wbs, &background_thresh,
 					&dirty_thresh, mapping);
 		nr_reclaimable = wbs.nr_dirty + wbs.nr_unstable;
