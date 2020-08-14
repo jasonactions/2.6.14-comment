@@ -37,9 +37,9 @@ void blk_put_request(struct request *req)
 
 long blk_congestion_wait(int rw, long timeout) 
 
- void blk_plug_device(request_queue_t *q) 
+void blk_plug_device(request_queue_t *q) 
 int blk_remove_plug(request_queue_t *q)
- void generic_unplug_device(request_queue_t *q) 
+void generic_unplug_device(request_queue_t *q) 
 
 request_queue_t *blk_alloc_queue(gfp_t gfp_mask)
 request_queue_t *blk_init_queue(request_fn_proc *rfn, spinlock_t *lock) 
@@ -59,8 +59,8 @@ struct buffer_head *__find_get_block(struct block_device *bdev, sector_t block, 
 struct buffer_head *__getblk(struct block_device *bdev, sector_t block, int size) 
 struct buffer_head *__bread(struct block_device *bdev, sector_t block, int size)
 
- static void init_page_buffers(struct page *page, struct block_device *bdev,
-sector_t block, int size)
+static void init_page_buffers(struct page *page, struct block_device *bdev,
+		sector_t block, int size)
 
 int submit_bh(int rw, struct buffer_head * bh)
 void ll_rw_block(int rw, int nr, struct buffer_head *bhs[])
@@ -72,7 +72,7 @@ int pdflush_operation(void (*fn)(unsigned long), unsigned long arg0)
 
 ## mm/page-writeback.c
 static void get_dirty_limits(struct writeback_state *wbs, long *pbackground, long *pdirty,
-struct address_space *mapping)
+		struct address_space *mapping)
 static void background_writeout(unsigned long _min_pages)
 int wakeup_pdflush(long nr_pages) 
 
@@ -137,7 +137,7 @@ ssize_t generic_file_read(struct file *filp, char __user *buf, size_t count, lof
 
 ## fs/mpage.c
 static struct bio *   do_mpage_readpage(struct bio *bio, struct page *page, unsigned nr_pages,
-sector_t *last_block_in_bio, get_block_t get_block)
+                      sector_t *last_block_in_bio, get_block_t get_block)
 int mpage_readpage(struct page *page, get_block_t get_block)
 
 ## fs/block_dev.c
@@ -168,26 +168,26 @@ struct pagevec
 
 ## fs/buffer.c
 static int __block_prepare_write(struct inode *inode, struct page *page,
-                unsigned from, unsigned to, get_block_t *get_block)
-int block_prepare_write(struct page *page, unsigned from, unsigned to,                                                                                                               
+                	     unsigned from, unsigned to, get_block_t *get_block)
+int block_prepare_write(struct page *page, unsigned from, unsigned to,                                                                                                           
                         get_block_t *get_block) 
 
 static int __block_commit_write(struct inode *inode, struct page *page,  
-                unsigned from, unsigned to)
+                	     unsigned from, unsigned to)
 int block_commit_write(struct page *page, unsigned from, unsigned to) 
 
 ## mm/filemap.c
-ssize_t generic_file_write(struct file *file, const char __user *buf,                                                                                                                
-                           size_t count, loff_t *ppos) 
+ssize_t generic_file_write(struct file *file, const char __user *buf,                                                                                                             
+                        size_t count, loff_t *ppos) 
 
 # 脏页写入磁盘
 ## fs/mpage.c
 static struct bio *__mpage_writepage(struct bio *bio, struct page *page, get_block_t get_block,                                                                                 
-        sector_t *last_block_in_bio, int *ret, struct writeback_control *wbc,                                                                                                     
-        writepage_t writepage_fn)                                                                                                                                                
+        		         sector_t *last_block_in_bio, int *ret, struct writeback_control *wbc,                                                                                         
+        		         writepage_t writepage_fn)                                                                                                                                                
 
 int mpage_writepages(struct address_space *mapping,
-                struct writeback_control *wbc, get_block_t get_block)
+                	struct writeback_control *wbc, get_block_t get_block)
 
 # 创建内存映射
 ## mm/filemap.c
@@ -195,14 +195,14 @@ int generic_file_mmap(struct file * file, struct vm_area_struct * vma)
 
 ## mm/mmap.c
 unsigned long do_mmap_pgoff(struct file * file, unsigned long addr,
-unsigned long len, unsigned long prot,
-unsigned long flags, unsigned long pgoff) 
+              unsigned long len, unsigned long prot,
+			           unsigned long flags, unsigned long pgoff) 
 
 ## arch/arm/kernel/sys_arm.c
 inline long do_mmap2(
-        unsigned long addr, unsigned long len,
-        unsigned long prot, unsigned long flags,
-        unsigned long fd, unsigned long pgoff)
+        		   unsigned long addr, unsigned long len,
+        		   unsigned long prot, unsigned long flags,
+        		   unsigned long fd, unsigned long pgoff)
 
 # 撤销内存映射
 int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
@@ -210,33 +210,33 @@ int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
 # 内存映射请求调页
 ## mm/filemap.c
 struct page *filemap_nopage(struct vm_area_struct *area,  
-unsigned long address, int *type)
+			            unsigned long address, int *type)
 ## mm/memory.c 
 static int do_no_page(struct mm_struct *mm, struct vm_area_struct *vma,
-unsigned long address, pte_t *page_table, pmd_t *pmd,
-int write_access)
+			           unsigned long address, pte_t *page_table, pmd_t *pmd,
+			           int write_access)
 
 # 内存映射脏页刷新到磁盘
 ## mm/msync.c
 static int msync_interval(struct vm_area_struct *vma, 
-unsigned long addr, unsigned long end, int flags)
-asmlinkage long sys_msync(unsigned long start, size_t len, int flags) 
+			          unsigned long addr, unsigned long end, int flags)
+             asmlinkage long sys_msync(unsigned long start, size_t len, int flags) 
 
 # 非线性内存映射
 ## mm/fremap.c 
 int filemap_populate(struct vm_area_struct *vma, unsigned long addr,
-unsigned long len, pgprot_t prot, unsigned long pgoff, int nonblock) 
+			          unsigned long len, pgprot_t prot, unsigned long pgoff, int nonblock) 
 
 asmlinkage long sys_remap_file_pages(unsigned long start, unsigned long size,
-unsigned long __prot, unsigned long pgoff, unsigned long flags)
+			         unsigned long __prot, unsigned long pgoff, unsigned long flags)
 
 # 直接I/O传送
 ## fs/direct-io.c 
 ssize_t
 __blockdev_direct_IO(int rw, struct kiocb *iocb, struct inode *inode,
-struct block_device *bdev, const struct iovec *iov, loff_t offset, 
+			         struct block_device *bdev, const struct iovec *iov, loff_t offset, 
 unsigned long nr_segs, get_blocks_t get_blocks, dio_iodone_t end_io,
-int dio_lock_type)
+			         int dio_lock_type)
 
 # 异步IO
 ## include/linux/aio.h
@@ -244,16 +244,16 @@ struct kioctx
 
 ## mm/filemap.c 
 static ssize_t generic_file_direct_IO(int rw, struct kiocb *iocb, const struct iovec *iov,
-loff_t offset, unsigned long nr_segs)
+			        loff_t offset, unsigned long nr_segs)
 ssize_t generic_file_aio_write_nolock(struct kiocb *iocb, const struct iovec *iov, 
-unsigned long nr_segs, loff_t *ppos)
+			        unsigned long nr_segs, loff_t *ppos)
 ssize_t __generic_file_aio_read(struct kiocb *iocb, const struct iovec *iov,
-unsigned long nr_segs, loff_t *ppos) 
+			        unsigned long nr_segs, loff_t *ppos) 
 
 ## fs/aio.c  
 static ssize_t aio_pread(struct kiocb *iocb)
 
- 	static ssize_t aio_run_iocb(struct kiocb *iocb
+static ssize_t aio_run_iocb(struct kiocb *iocb
 
- asmlinkage long sys_io_submit(aio_context_t ctx_id, long nr,
-struct iocb __user * __user *iocbpp) 
+asmlinkage long sys_io_submit(aio_context_t ctx_id, long nr,
+			struct iocb __user * __user *iocbpp) 
