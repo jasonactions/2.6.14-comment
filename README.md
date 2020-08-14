@@ -3,7 +3,7 @@
 下面列出了各个场景的主要函数：
 
 # generic block
-##include/linux/fs.h
+## include/linux/fs.h
 struct block_device_operations
 ## include/linux/genhd.h
 struct gendisk
@@ -18,14 +18,14 @@ struct elevator_queue
 ## fs/block_dev.c
 struct block_device *bdget(dev_t dev) 
 
-##block/genhd.c
+## block/genhd.c
 struct gendisk *alloc_disk_node(int minors, int node_id) 
 int register_blkdev(unsigned int major, const char *name)
 
 void blk_queue_make_request(request_queue_t * q, make_request_fn * mfn)
 void add_disk(struct gendisk *disk) 
 
-##fs/bio.c
+## fs/bio.c
 struct bio *bio_alloc(gfp_t gfp_mask, int nr_iovecs) 
 
 ## block/ll_rw_blk.c   
@@ -46,7 +46,7 @@ request_queue_t *blk_init_queue(request_fn_proc *rfn, spinlock_t *lock)
 void blk_queue_hardsect_size(request_queue_t *q, unsigned short size)
 
 # page/buffer cache
-##include/linux/bio.h
+## include/linux/bio.h
 struct bio;
 struct bio_vec;
 ## include/linux/buufer_head.h
