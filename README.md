@@ -71,7 +71,7 @@ static int __init pdflush_init(void)
 int pdflush_operation(void (*fn)(unsigned long), unsigned long arg0) 
 
 ## mm/page-writeback.c
- static void get_dirty_limits(struct writeback_state *wbs, long *pbackground, long *pdirty,
+static void get_dirty_limits(struct writeback_state *wbs, long *pbackground, long *pdirty,
 struct address_space *mapping)
 static void background_writeout(unsigned long _min_pages)
 int wakeup_pdflush(long nr_pages) 
@@ -157,7 +157,7 @@ blockable_page_cache_readahead(struct address_space *mapping, struct file *filp,
                         unsigned long offset, unsigned long nr_to_read,
                         struct file_ra_state *ra, int block)
 unsigned long page_cache_readahead(struct address_space *mapping, struct file_ra_state *ra,
-struct file *filp, unsigned long offset, unsigned long req_size) 
+                        struct file *filp, unsigned long offset, unsigned long req_size) 
 
 # WRITE FILE
 ## include/linux/uio.h
@@ -182,10 +182,9 @@ ssize_t generic_file_write(struct file *file, const char __user *buf,
 
 # 脏页写入磁盘
 ## fs/mpage.c
-static struct bio *                                                                                                                                                               
-__mpage_writepage(struct bio *bio, struct page *page, get_block_t get_block,                                                                                                     
+static struct bio *__mpage_writepage(struct bio *bio, struct page *page, get_block_t get_block,                                                                                 
         sector_t *last_block_in_bio, int *ret, struct writeback_control *wbc,                                                                                                     
-        writepage_t writepage_fn) 
+        writepage_t writepage_fn)                                                                                                                                                
 
 int mpage_writepages(struct address_space *mapping,
                 struct writeback_control *wbc, get_block_t get_block)
