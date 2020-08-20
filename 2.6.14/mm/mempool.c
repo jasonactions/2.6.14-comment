@@ -58,9 +58,12 @@ mempool_t *mempool_create(int min_nr, mempool_alloc_t *alloc_fn,
 }
 EXPORT_SYMBOL(mempool_create);
 
-/* @min_nr: memory pool的元素个数
+/* @min_nr: 要创建的memory pool的元素个数
+ * @alloc_fn: 元素分配函数
+ * @free_fn:元素释放函数
+ * @pool_data:池的拥有者的一些私有数据
  *
- * 创建memory pool
+ * 创建一个新的memory pool，元素个数为min_nr,元素类型为pool_data
  */
 mempool_t *mempool_create_node(int min_nr, mempool_alloc_t *alloc_fn,
 			mempool_free_t *free_fn, void *pool_data, int node_id)
@@ -204,6 +207,7 @@ EXPORT_SYMBOL(mempool_destroy);
  * *never* fails when called from process contexts. (it might
  * fail if called from an IRQ context.)
  */
+/*内存池分配函数*/
 void * mempool_alloc(mempool_t *pool, gfp_t gfp_mask)
 {
 	void *element;
@@ -221,10 +225,12 @@ void * mempool_alloc(mempool_t *pool, gfp_t gfp_mask)
 
 repeat_alloc:
 
+	/*优先从slab分配器分配*/
 	element = pool->alloc(gfp_temp, pool->pool_data);
 	if (likely(element != NULL))
 		return element;
 
+	/*如果分配失败将从内存池分配*/
 	spin_lock_irqsave(&pool->lock, flags);
 	if (likely(pool->curr_nr)) {
 		element = remove_element(pool);
@@ -238,11 +244,13 @@ repeat_alloc:
 		return NULL;
 
 	/* Now start performing page reclaim */
+	/*运行到此内存池内存不足*/
 	gfp_temp = gfp_mask;
 	init_wait(&wait);
 	prepare_to_wait(&pool->wait, &wait, TASK_UNINTERRUPTIBLE);
 	smp_mb();
 	if (!pool->curr_nr)
+		/*阻塞当前进程，直到有一个内存元素释放到内存池*/
 		io_schedule();
 	finish_wait(&pool->wait, &wait);
 
@@ -258,6 +266,7 @@ EXPORT_SYMBOL(mempool_alloc);
  *
  * this function only sleeps if the free_fn() function sleeps.
  */
+/*释放一个元素到内存池，如果内存池已满，则释放到内存分配器*/
 void mempool_free(void *element, mempool_t *pool)
 {
 	unsigned long flags;
@@ -273,6 +282,7 @@ void mempool_free(void *element, mempool_t *pool)
 		}
 		spin_unlock_irqrestore(&pool->lock, flags);
 	}
+	/*内存池已满，释放给内存分配器*/
 	pool->free(element, pool->pool_data);
 }
 EXPORT_SYMBOL(mempool_free);

@@ -23,7 +23,9 @@
 #endif
 
 struct free_area {
+	/*包含每个空闲页框块（大小为 2^order）的起始页框的描述符组成的链表,页的链接件为lru*/
 	struct list_head	free_list;
+	/*大小为2^order页的空闲块的个数*/
 	unsigned long		nr_free;
 };
 
@@ -51,8 +53,9 @@ struct per_cpu_pages {
 	int batch;		/* chunk size for buddy add/remove */
 	struct list_head list;	/* the list of pages */
 };
-
+/*per cpu页框高速缓存,位于zone描述符*/
 struct per_cpu_pageset {
+	/*hot高速缓存存放的页框中包含内容很可能在硬件cache*/
 	struct per_cpu_pages pcp[2];	/* 0: hot.  1: cold */
 #ifdef CONFIG_NUMA
 	unsigned long numa_hit;		/* allocated in intended node */
@@ -114,10 +117,12 @@ struct per_cpu_pageset {
  * ZONE_NORMAL	16-896 MB	direct mapped by the kernel
  * ZONE_HIGHMEM	 > 896 MB	only page cache and user processes
  */
-
+/*内存管理区描述符*/
 struct zone {
 	/* Fields commonly accessed by the page allocator */
+	/*管理区中空闲页的数目*/
 	unsigned long		free_pages;
+	/*分别是管理区中保留页的数目，回收页框下界(pages_min的5/4)，回收页框上界(pages_min的3/2)*/
 	unsigned long		pages_min, pages_low, pages_high;
 	/*
 	 * We don't know if the memory that we're going to allocate will be freeable
@@ -127,9 +132,14 @@ struct zone {
 	 * on the higher zones). This array is recalculated at runtime if the
 	 * sysctl_lowmem_reserve_ratio sysctl changes.
 	 */
+	/*
+	 * 每个内存管理区为处理内存不足的临界情况，必须保留的页框数
+	 * 只能用于满足中断处理程序或内部临界区发出的原子内存分配请求
+	 */
 	unsigned long		lowmem_reserve[MAX_NR_ZONES];
 
 #ifdef CONFIG_NUMA
+	/*per-cpu页框高速缓存*/
 	struct per_cpu_pageset	*pageset[NR_CPUS];
 #else
 	struct per_cpu_pageset	pageset[NR_CPUS];
@@ -142,26 +152,37 @@ struct zone {
 	/* see spanned/present_pages for more description */
 	seqlock_t		span_seqlock;
 #endif
+	/*记录管理区不同2 ^ order的空间页框块*/
 	struct free_area	free_area[MAX_ORDER];
 
 
 	ZONE_PADDING(_pad1_)
 
 	/* Fields commonly accessed by the page reclaim scanner */
+	/*保护active/inactive链表*/
 	spinlock_t		lru_lock;	
+	/*活动链表,保存最近访问的页*/
 	struct list_head	active_list;
+	/*非活动链表，保存有一段时间没有访问的页*/
 	struct list_head	inactive_list;
+	/*回收内存时需要扫描的活动页数*/
 	unsigned long		nr_scan_active;
+	/*回收内存时需要扫描的非活动页数*/
 	unsigned long		nr_scan_inactive;
+	/*active链表上的页数*/
 	unsigned long		nr_active;
+	/*inactive链表上的页数*/
 	unsigned long		nr_inactive;
+	/*管理区内回收页框时使用的计数器*/
 	unsigned long		pages_scanned;	   /* since last reclaim */
+	/*在管理区中填满不可回收页时此标志置位*/
 	int			all_unreclaimable; /* All pages pinned */
 
 	/*
 	 * Does the allocator try to reclaim pages from the zone as soon
 	 * as it fails a watermark_ok() in __alloc_pages?
 	 */
+	/*分配页框失败时允许页面回收的页数？*/
 	int			reclaim_pages;
 	/* A count of how many reclaimers are scanning this zone */
 	atomic_t		reclaim_in_progress;
@@ -182,6 +203,7 @@ struct zone {
 	 * Access to both these fields is quite racy even on uniprocessor.  But
 	 * it is expected to average out OK.
 	 */
+	/*???*/
 	int temp_priority;
 	int prev_priority;
 
@@ -213,16 +235,22 @@ struct zone {
 	 * primary users of these fields, and in mm/page_alloc.c
 	 * free_area_init_core() performs the initialization of them.
 	 */
+	/*进程等待队列的散列表，这些进程正在等待管理区中的某页*/
 	wait_queue_head_t	* wait_table;
+	/*等待队列散列表大小*/
 	unsigned long		wait_table_size;
+	/*等待队列散列表数组大小2 ^ order*/
 	unsigned long		wait_table_bits;
 
 	/*
 	 * Discontig memory support fields.
 	 */
+	/*关联的内存节点*/
 	struct pglist_data	*zone_pgdat;
+	/*指向管理区第一个页描述符*/
 	struct page		*zone_mem_map;
 	/* zone_start_pfn == zone_start_paddr >> PAGE_SHIFT */
+	/*管理区第一个页框的下标*/
 	unsigned long		zone_start_pfn;
 
 	/*
@@ -235,12 +263,15 @@ struct zone {
 	 * frequently read in proximity to zone->lock.  It's good to
 	 * give them a chance of being in the same cacheline.
 	 */
+	/*以页为单位管理区的总大小，包括洞*/
 	unsigned long		spanned_pages;	/* total size, including holes */
+	/*以页为单位管理区的总大小，不包括洞*/
 	unsigned long		present_pages;	/* amount of memory (excluding holes) */
 
 	/*
 	 * rarely used fields:
 	 */
+	/*指针指向管理区传统名称*/
 	char			*name;
 } ____cacheline_maxaligned_in_smp;
 
@@ -280,13 +311,18 @@ struct zonelist {
  * per-zone basis.
  */
 struct bootmem_data;
+/*内存节点描述符，它可以分为多个zone, 节点0的描述符保存在contig_page_data变量*/
 typedef struct pglist_data {
+	/*节点中zone描述符数组*/
 	struct zone node_zones[MAX_NR_ZONES];
+	/*页分配器使用,代表内存分配后备zone管理区,体现优先级*/
 	struct zonelist node_zonelists[GFP_ZONETYPES];
 	int nr_zones;
 #ifdef CONFIG_FLAT_NODE_MEM_MAP
+	/*节点中页描述符数组*/
 	struct page *node_mem_map;
 #endif
+	/*用于内核初始化阶段*/
 	struct bootmem_data *bdata;
 #ifdef CONFIG_MEMORY_HOTPLUG
 	/*
@@ -298,14 +334,22 @@ typedef struct pglist_data {
 	 */
 	spinlock_t node_size_lock;
 #endif
+	/*节点中第一个页框的下标*/
 	unsigned long node_start_pfn;
+	/*内存节点包含的页数，不包括洞*/
 	unsigned long node_present_pages; /* total number of physical pages */
+	/*内存节点包含的页数，包括洞*/
 	unsigned long node_spanned_pages; /* total size of physical page
 					     range, including holes */
+	/*节点标识符*/
 	int node_id;
+	/*内存节点链表的下一项*/
 	struct pglist_data *pgdat_next;
+	/*kswappd页回收守护进程使用的等待队列*/
 	wait_queue_head_t kswapd_wait;
+	/*回收线程描述符*/
 	struct task_struct *kswapd;
+	/*空闲块大小取对数的最大值???*/
 	int kswapd_max_order;
 } pg_data_t;
 
@@ -585,6 +629,7 @@ static inline struct mem_section *__pfn_to_section(unsigned long pfn)
 	unsigned long __pfn = (pfn);					\
 	__section_mem_map_addr(__pfn_to_section(__pfn)) + __pfn;	\
 })
+/*根据page描述符的地址获取页帧号*/
 #define page_to_pfn(page)						\
 ({									\
 	page - __section_mem_map_addr(__nr_to_section(			\

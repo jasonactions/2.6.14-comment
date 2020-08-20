@@ -75,6 +75,17 @@ unsigned long num_physpages;
  * highstart_pfn must be the same; there must be no gap between ZONE_NORMAL
  * and ZONE_HIGHMEM.
  */
+/*
+ * 直接映射的物理内存末端、高端内存的始端所对应的线性地址存放在high_memory,它被置为896MB
+ * 返回所分配页框线性地址的页分配器函数不适用于高端内存,即不适用于ZONE_HIGHMEM内存管理区的页框
+ * 也就是从高端内存分配的页框的线性地址根本不存在,高端内存页框分配只能通过alloc_pages()
+ * 因为alloc_pages返回page地址，而page在初始化时分配且不会改变，位于低端内存映射区
+ * 内核将内核线性地址的最后128MB中部分用作映射高端内存页框
+ * 将页框映射到高端内存映射区有三种方法：永久内存映射、临时内存映射、非连续内存区管理
+ * （1）永久内存映射：当发生空闲页表项不存在时，会阻塞进程，因此不能用于中断；
+ * （2）临时内存映射：要保证当前没有其他内核控制路径使用同样映射，因此不会要求阻塞当前进程
+ *
+ */
 void * high_memory;
 unsigned long vmalloc_earlyreserve;
 

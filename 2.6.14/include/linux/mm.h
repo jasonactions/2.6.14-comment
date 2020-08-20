@@ -227,16 +227,30 @@ typedef unsigned long page_flags_t;
  * moment. Note that we have no way to track which tasks are using
  * a page.
  */
+/*页框描述符，所有页描述符保存在mem_map中*/
 struct page {
+	/*
+	 * 一组标志PG_xyz，PageXyz返回标志的值，SetPageXyz和ClearPageXyz分别设置和清除相应的位
+	 *  对页框所在管理区进行编号
+	 *  flags高位用来编码特定内存节点和管理区号
+	 */
 	page_flags_t flags;		/* Atomic flags, some possibly
 					 * updated asynchronously */
+	/* 页的引用计数，-1表示页框空闲，大于等于0说明分配给一个或多个进程或存放内核数据结构，
+	 * page_count返回_count加1，表示页使用者数目*/
 	atomic_t _count;		/* Usage count, see below. */
+	/*页框中的页表项数目（如果没有则-1）*/
 	atomic_t _mapcount;		/* Count of ptes mapped in mms,
 					 * to show when page is mapped
 					 * & limit reverse map searches.
 					 */
 	union {
-		/*对于page cache,private指向第一个buffer_head*/
+		/*
+		 * 可用于正在使用页的内核成分
+		 * 对于page cache,private指向第一个buffer_headi
+		 * 如果页是空闲页框块的第一个page，则由buddy使用保存page所属页框块的order
+		 * 它可以用于相邻页框块是否可以合并为2^(order+1)大小的页框快
+		 */
 		unsigned long private;	/* Mapping-private opaque data:
 					 * usually used for buffer_heads
 					 * if PagePrivate set; used for
@@ -248,6 +262,7 @@ struct page {
 		spinlock_t ptl;
 #endif
 	} u;
+	/*当页被插入高速缓存或页属于匿名区时使用*/
 	struct address_space *mapping;	/* If low bit clear, points to
 					 * inode address_space, or NULL.
 					 * If page mapped as anonymous
@@ -255,7 +270,12 @@ struct page {
 					 * it points to anon_vma object:
 					 * see PAGE_MAPPING_ANON below.
 					 */
+	/*存放文件的页索引或存放一个换出页标识符*/
 	pgoff_t index;			/* Our offset within mapping. */
+	/*
+	 * 当页空闲时lru链入到free_area->free_list链表，不空闲时链接到lru链表的链接件
+	 * 如果page是slab的一个页框，则lru->next和lru->prev分别存放高速缓存描述符和slab描述符
+	 */
 	struct list_head lru;		/* Pageout list, eg. active_list
 					 * protected by zone->lru_lock !
 					 */
@@ -542,8 +562,13 @@ static inline void set_page_links(struct page *page, unsigned long zone,
 extern struct page *mem_map;
 #endif
 
+/*获取低端内存区page的虚拟地址*/
 static inline void *lowmem_page_address(struct page *page)
 {
+	/* 
+	 * page_to_pfn(page)<< PAGE_SHIFT返回page的物理地址
+	 * 由于位于低端内存，因此虚拟地址和物理地址之间相差一个offset
+	 */
 	return __va(page_to_pfn(page) << PAGE_SHIFT);
 }
 
