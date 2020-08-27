@@ -300,24 +300,50 @@ typedef unsigned long mm_counter_t;
 		(mm)->hiwater_vm = (mm)->total_vm;	\
 } while (0)
 
+/*内存描述符，描述与进程地址空间有关的全部信息,init_mm是进程0所使用的内存描述符*/
 struct mm_struct {
+	/*指向线性区对象的链表头*/
 	struct vm_area_struct * mmap;		/* list of VMAs */
+	/*指向线性区对象的红-黑树的根*/
 	struct rb_root mm_rb;
+	/*指向最后一次引用的线性区对象*/
 	struct vm_area_struct * mmap_cache;	/* last find_vma result */
+	/*
+	 * 在进程地址空间搜索有效线性地址区间的方法
+	 * 根据进程线性区类型，有两种：arch_get_unmapped_area和arch_get_unmapped_area_top_down
+	 */
 	unsigned long (*get_unmapped_area) (struct file *filp,
 				unsigned long addr, unsigned long len,
 				unsigned long pgoff, unsigned long flags);
+	/*释放线性地址区间时调用的方法*/
 	void (*unmap_area) (struct mm_struct *mm, unsigned long addr);
+	/*标示第一个分配的匿名线性区或文件内存映射的线性地址*/
         unsigned long mmap_base;		/* base of mmap area */
+	/*刚刚访问vma空洞,空洞是指位于vma之间的未映射区域*/
         unsigned long cached_hole_size;         /* if non-zero, the largest hole below free_area_cache */
+	/*
+	 * 最近被分配的线性区的结束地址，初始化为用户态线性地址空间的1/3(1G,0x4000 0000)
+	 * 注：用户态线性地址空间的1/3为预定义起始地址线性区，典型为text段，data段，bss段保留
+	 * 内核从这个地址开始搜索进程地址空间中线性地址的空闲区间
+	 */
 	unsigned long free_area_cache;		/* first hole of size cached_hole_size or larger */
+	/*指向页全局目录*/
 	pgd_t * pgd;
+	/*
+	 * 次使用计数器,存放共享mm_struct数据结构的轻量级进程的个数，如clone,fork及vfork
+	 * 如果要确保mm_struct不被释放，则增加mm_users，保证mm_count不变为0
+	 */
 	atomic_t mm_users;			/* How many users with user space? */
+	/*主使用计数器, 如果两个轻量级进程共享内存描述符，计数算为1，如果其它内核线程访问则增加1,mm_count为0则释放*/
 	atomic_t mm_count;			/* How many references to "struct mm_struct" (users count as 1) */
+	/*进程线性区的个数,最多65536，可通过/proc/sys/vm/max_map_count修改*/
 	int map_count;				/* number of VMAs */
+	/*线性区的读/写信号量*/
 	struct rw_semaphore mmap_sem;
+	/*线性区和页表自旋锁*/
 	spinlock_t page_table_lock;		/* Protects page tables and some counters */
 
+	/*所有内存描述符放入双向链表中，此指向内存描述符链表的连接件*/
 	struct list_head mmlist;		/* List of maybe swapped mm's.  These are globally strung
 						 * together off init_mm.mmlist, and are protected
 						 * by mmlist_lock
@@ -329,34 +355,52 @@ struct mm_struct {
 	mm_counter_t _file_rss;
 	mm_counter_t _anon_rss;
 
+	/*进程所拥有的最大页框数*/
 	unsigned long hiwater_rss;	/* High-watermark of RSS usage */
+	/*进程线性区中的最大页数*/
 	unsigned long hiwater_vm;	/* High-water virtual memory usage */
 
+	/*进程地址空间大小（页数）；锁住不能换出的页数；共享文件内存映射页框数；可执行内存映射中的页数*/
 	unsigned long total_vm, locked_vm, shared_vm, exec_vm;
+	/*用户态堆栈页数；在保留区中的页数或特殊线性区的页数；线性区默认访问标志；this进程页表项数*/
 	unsigned long stack_vm, reserved_vm, def_flags, nr_ptes;
+	/*可执行代码的起始/结束地址；已初始化数据的起始/结束地址*/
 	unsigned long start_code, end_code, start_data, end_data;
+	/*堆的起始地址/当前地址;用户态栈的起始地址*/
 	unsigned long start_brk, brk, start_stack;
+	/*命令行参数的起始地址/结束地址；环境变量的起始/结束地址*/
 	unsigned long arg_start, arg_end, env_start, env_end;
 
+	/*开始执行elf程序时使用*/
 	unsigned long saved_auxv[AT_VECTOR_SIZE]; /* for /proc/PID/auxv */
 
+	/*表示是否可以产生内存信息转储的标志*/
 	unsigned dumpable:2;
+	/*用于懒惰TLB交换的位掩码???*/
 	cpumask_t cpu_vm_mask;
 
 	/* Architecture-specific MM context */
+	/*指向有关特定体系结构信息的表*/
 	mm_context_t context;
 
 	/* Token based thrashing protection. */
+	/*进程在这个时间将有资格获取交换标记*/
 	unsigned long swap_token_time;
+	/*如果最近发生了主缺页，则设置该标志*/
 	char recent_pagein;
 
 	/* coredumping support */
+	/*正在把进程地址空间的内容卸载到转储文件中的轻量级进程的数量*/
 	int core_waiters;
+	/*指向创建内存转储文件时的补充原语;创建内存转储文件时的补充原语*/
 	struct completion *core_startup_done, core_done;
 
 	/* aio bits */
+	/*用于保护异步IO上下文链表的锁*/
 	rwlock_t		ioctx_list_lock;
+	/*异步IO上下文链表*/
 	struct kioctx		*ioctx_list;
+	/*默认的异步IO上下文*/
 	struct kioctx		default_kioctx;
 };
 
@@ -723,6 +767,11 @@ struct task_struct {
 	struct list_head ptrace_children;
 	struct list_head ptrace_list;
 
+	/*
+	 * mm为进程拥有的内存描述符，active_mm为进程运行时使用的描述符
+	 * 对普通进程两者相同，对内核线程mm为NULL，表示不拥有任何内存描述符
+	 * 内核线程将active_mm初始化为前一个运行进程的active_mm
+	 */
 	struct mm_struct *mm, *active_mm;
 
 /* task state */

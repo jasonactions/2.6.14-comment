@@ -90,6 +90,7 @@ static int vmap_pte_range(pmd_t *pmd, unsigned long addr,
 {
 	pte_t *pte;
 
+	/*分配一个pte目录项*/
 	pte = pte_alloc_kernel(pmd, addr);
 	if (!pte)
 		return -ENOMEM;
@@ -110,10 +111,12 @@ static inline int vmap_pmd_range(pud_t *pud, unsigned long addr,
 	pmd_t *pmd;
 	unsigned long next;
 
+	/*分配一个pmd目录项*/
 	pmd = pmd_alloc(&init_mm, pud, addr);
 	if (!pmd)
 		return -ENOMEM;
 	do {
+		/*返回addr所属pmd项的下一个pmd项的地址范围的起始地址*/
 		next = pmd_addr_end(addr, end);
 		if (vmap_pte_range(pmd, addr, next, prot, pages))
 			return -ENOMEM;
@@ -127,10 +130,12 @@ static inline int vmap_pud_range(pgd_t *pgd, unsigned long addr,
 	pud_t *pud;
 	unsigned long next;
 
+	/*分配pud页表项，返回address对应的pud页表项的虚拟地址*/
 	pud = pud_alloc(&init_mm, pgd, addr);
 	if (!pud)
 		return -ENOMEM;
 	do {
+		/*返回addr所属pud项的下一个pud项的地址范围的起始地址*/
 		next = pud_addr_end(addr, end);
 		if (vmap_pmd_range(pud, addr, next, prot, pages))
 			return -ENOMEM;
@@ -154,11 +159,17 @@ int map_vm_area(struct vm_struct *area, pgprot_t prot, struct page ***pages)
 	int err;
 
 	BUG_ON(addr >= end);
+	/*
+	 * 根据地址addr获取内核的pgd页表项,页目录基址位于init_mm.pgd也就是swapper_pg_dir
+	 * 由于在init_mm中通过vmalloc建立的映射区间，因此通过本进程mm_struct中访问该区间地址时发生pagefault
+	 * 通过do_page_fault的vmalloc_fault来修正
+	 *
+	 */ 
 	pgd = pgd_offset_k(addr);
 	do {
-		/*???*/
+		/*返回addr所属pgd项的下一个pgd项的地址范围的起始地址*/
 		next = pgd_addr_end(addr, end);
-		/*???*/
+		/*为addr创建pgd页表项，并对下一个地址next创建pgd页表项*/
 		err = vmap_pud_range(pgd, addr, next, prot, pages);
 		if (err)
 			break;

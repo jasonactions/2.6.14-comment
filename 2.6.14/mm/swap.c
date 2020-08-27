@@ -159,6 +159,7 @@ void fastcall lru_cache_add_active(struct page *page)
 	put_cpu_var(lru_add_active_pvecs);
 }
 
+/*把扔留在pagevec数据结构中的所有页移入活动与非活动链表*/
 void lru_add_drain(void)
 {
 	struct pagevec *pvec = &get_cpu_var(lru_add_pvecs);

@@ -177,9 +177,11 @@ static inline void ptep_set_wrprotect(struct mm_struct *mm, unsigned long addres
  * vma end wraps to 0, rounded up __boundary may wrap to 0 throughout.
  */
 /*
+ * 返回addr所属pgd项的下一个pgd项的地址范围的起始地址址
+ *
  * pgd中的一个描述符只能mapping有限区域的虚拟地址（PGDIR_SIZE）
  * 此宏计算addr所在区域的end address
- * 如果计算出来的end address小于传入的end地址参数，那么返回end参数值。
+ * 如果计算出来的end address小于传入的end地址参数，那么返回end address值。
  * 也就是说，如果（addr，length）这个虚拟地址范围的mapping需要跨越多个pgd entry，
  * 那么next变量保存了下一个pgd entry的起始虚拟地址
  */

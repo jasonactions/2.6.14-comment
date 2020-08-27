@@ -60,19 +60,33 @@ extern int sysctl_legacy_va_layout;
  *    +-----------------------------------------------+
  *    |<--vm_offset-->|
  */
+/*
+ * 线性区描述符,线性区不同重叠，通过两种方法存储：
+ * 1.通过链表，进程所有线性区以内存地址升序链接在一起,链表头位于mm_struct->mmap
+ * 2.通过红黑树存放
+ */
 struct vm_area_struct {
+	/*指向线性区所在的内存描述符*/
 	struct mm_struct * vm_mm;	/* The address space we belong to. */
-	/*对于内存映射vm_start和vm_end表示映射文件的长度,也是线性区的大小*/
+	/*
+	 * vm_start博阿含区间的第一个线性地址；vm_end包含区间之外的第一个线性地址
+	 * vm_end-vm_start表示区间长度
+	 * 对于内存映射vm_start和vm_end表示映射文件的长度,也是线性区的大小
+	 */
 	unsigned long vm_start;		/* Our start address within vm_mm. */
 	unsigned long vm_end;		/* The first byte after our end address
 					   within vm_mm. */
 
 	/* linked list of VM areas per task, sorted by address */
+	/*进程链表的下一个线性区*/
 	struct vm_area_struct *vm_next;
 
+	/*线性区中页框的访问许可权,页表标志的初值*/
 	pgprot_t vm_page_prot;		/* Access permissions of this VMA. */
+	/*线性区的标志*/
 	unsigned long vm_flags;		/* Flags, listed below. */
 
+	/*用于红黑树的数据*/
 	struct rb_node vm_rb;
 
 	/*
@@ -81,6 +95,7 @@ struct vm_area_struct {
 	 * linkage to the list of like vmas hanging off its node, or
 	 * linkage of vma in the address_space->i_mmap_nonlinear list.
 	 */
+	/*链接到反映射所使用的数据结构*/
 	union {
 		struct {
 			struct list_head list;
@@ -97,19 +112,27 @@ struct vm_area_struct {
 	 * can only be in the i_mmap tree.  An anonymous MAP_PRIVATE, stack
 	 * or brk vma (with NULL file) can only be in an anon_vma list.
 	 */
+	/*链入匿名线性区链表的链接件*/
 	struct list_head anon_vma_node;	/* Serialized by anon_vma->lock */
+	/*反向映射*/
 	struct anon_vma *anon_vma;	/* Serialized by page_table_lock */
 
 	/* Function pointers to deal with this struct. */
+	/*指向线性区的方法*/
 	struct vm_operations_struct * vm_ops;
 
 	/* Information about our backing store: */
-	/*内存映射文件的第一个映射单元的位置,以页大小为单位*/
+	/*
+	 * 对文件页，它是映射文件偏移量，内存映射文件的第一个映射单元的位置,以页大小为单位
+	 * 对匿名页，它等于0或vm_start/PAGE_SIZE
+	 */
 	unsigned long vm_pgoff;		/* Offset (within vm_file) in PAGE_SIZE
 					   units, *not* PAGE_CACHE_SIZE */
 	/*指向所映射文件的文件对象*/
 	struct file * vm_file;		/* File we map to (can be NULL). */
+	/*指向内存区私有数据*/
 	void * vm_private_data;		/* was vm_pte (shared mem) */
+	/*释放非线性文件内存映射中的一个线性地址区间时使用*/
 	unsigned long vm_truncate_count;/* truncate_count or restart_addr */
 
 #ifndef CONFIG_MMU
@@ -140,35 +163,58 @@ extern unsigned int kobjsize(const void *objp);
 /*
  * vm_flags..
  */
+/*页可读*/
 #define VM_READ		0x00000001	/* currently active flags */
+/*页可写*/
 #define VM_WRITE	0x00000002
+/*页可执行*/
 #define VM_EXEC		0x00000004
+/*页可以被几个进程共享*/
 #define VM_SHARED	0x00000008
 
 /* mprotect() hardcodes VM_MAYREAD >> 4 == VM_READ, and so for r/w/x bits. */
+/*可以设置VM_READ标志*/
 #define VM_MAYREAD	0x00000010	/* limits for mprotect() etc */
+/*可以设置VM_WRITE标志*/ 
 #define VM_MAYWRITE	0x00000020
+/*可以设置VM_EXEC标志*/ 
 #define VM_MAYEXEC	0x00000040
+/*可以设置VM_SHARE标志*/ 
 #define VM_MAYSHARE	0x00000080
 
+/*线性区可以向低地址扩展*/
 #define VM_GROWSDOWN	0x00000100	/* general info on the segment */
+/*线性区可以向高地址扩展*/
 #define VM_GROWSUP	0x00000200
+/*线性区用于IPC共享内存*/
 #define VM_SHM		0x00000400	/* shared memory area, don't swap out */
+/*线性区映射一个不能打开用于写的文件*/
 #define VM_DENYWRITE	0x00000800	/* ETXTBSY on write attempts.. */
 
+/*线性区映射一个可执行文件*/
 #define VM_EXECUTABLE	0x00001000
+/*线性区中的页锁定，不能换出*/
 #define VM_LOCKED	0x00002000
+/*线性区用于映射设备的IO地址空间*/
 #define VM_IO           0x00004000	/* Memory mapped I/O or similar */
 
-					/* Used by sys_madvise() */
+
+/*应用程序顺序访问页*/			/* Used by sys_madvise() */
 #define VM_SEQ_READ	0x00008000	/* App will access data sequentially */
+/*应用程序以真正的随机顺序访问页*/
 #define VM_RAND_READ	0x00010000	/* App will not benefit from clustered reads */
 
+/*当创建一个新进程时不拷贝线性区*/
 #define VM_DONTCOPY	0x00020000      /* Do not copy this vma on fork */
+/*通过mremap()系统调用禁止线性区扩展*/
 #define VM_DONTEXPAND	0x00040000	/* Cannot expand with mremap() */
+/*线性区是特殊的（如映射到某个设备的IO地址空间），不能被交换出去*/
 #define VM_RESERVED	0x00080000	/* Pages managed in a special way */
+/*创建IPC共享线性区时检查是否有足够的空闲内存用于映射*/
 #define VM_ACCOUNT	0x00100000	/* Is a VM accounted object */
+/*通过扩展分页机制处理线性区中的页???*/
 #define VM_HUGETLB	0x00400000	/* Huge TLB Page VM */
+/*线性区实现非线性文件映射???*/
 #define VM_NONLINEAR	0x00800000	/* Is non-linear (remap_file_pages) */
 #define VM_MAPPED_COPY	0x01000000	/* T if mapped copy of data (nommu mmap) */
 
@@ -200,10 +246,15 @@ extern pgprot_t protection_map[16];
  * unmapping it (needed to keep files on disk up-to-date etc), pointer
  * to the functions called when a no-page or a wp-page exception occurs. 
  */
+/*线性区函数集*/
 struct vm_operations_struct {
+	/*把线性区增加到进程所拥有的线性区集合时使用*/
 	void (*open)(struct vm_area_struct * area);
+	/*当从进程所拥有的线性区集合删除线性区时使用*/
 	void (*close)(struct vm_area_struct * area);
+	/*当进程试图访问RAM不存在的页，但该页的线性地址属于线性区时，由缺页异常处理程序调用*/
 	struct page * (*nopage)(struct vm_area_struct * area, unsigned long address, int *type);
+	/*设置线性区的线性地址所对应的页表项时调用，主要用于非线性文件内存映射???*/
 	int (*populate)(struct vm_area_struct * area, unsigned long address, unsigned long len, pgprot_t prot, unsigned long pgoff, int nonblock);
 #ifdef CONFIG_NUMA
 	int (*set_policy)(struct vm_area_struct *vma, struct mempolicy *new);
@@ -233,6 +284,8 @@ struct page {
 	 * 一组标志PG_xyz，PageXyz返回标志的值，SetPageXyz和ClearPageXyz分别设置和清除相应的位
 	 *  对页框所在管理区进行编号
 	 *  flags高位用来编码特定内存节点和管理区号
+	 *
+	 *  注：与page相关的标志有三种：1.页表项中存放的；2.此处存放的标志;3.vm_area_strut->vm_flags
 	 */
 	page_flags_t flags;		/* Atomic flags, some possibly
 					 * updated asynchronously */
@@ -262,7 +315,11 @@ struct page {
 		spinlock_t ptl;
 #endif
 	} u;
-	/*当页被插入高速缓存或页属于匿名区时使用*/
+	/*
+	 * 当页被插入高速缓存或页属于匿名区时使用
+	 * 当页为匿名页，则mapping保存anon_vma的地址
+	 * 注：anon_vma为匿名页所在线性区VMA的链表头
+	 */
 	struct address_space *mapping;	/* If low bit clear, points to
 					 * inode address_space, or NULL.
 					 * If page mapped as anonymous
@@ -753,6 +810,14 @@ extern int install_page(struct mm_struct *mm, struct vm_area_struct *vma, unsign
 extern int install_file_pte(struct mm_struct *mm, struct vm_area_struct *vma, unsigned long addr, unsigned long pgoff, pgprot_t prot);
 extern int __handle_mm_fault(struct mm_struct *mm,struct vm_area_struct *vma, unsigned long address, int write_access);
 
+/*
+ * 为vma的address分配一个新页表项和页框
+ *
+ * @mm: 异常发生时正在CPU上运行的进程的内存描述符
+ * @vma: 引起异常的线性地址所在线性区的描述符
+ * @address: 引起异常的线性地址
+ * @write_access: 如果task试图向address写，则置为1，如果task试图在address读或执行，则置为0
+ */
 static inline int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma, unsigned long address, int write_access)
 {
 	return __handle_mm_fault(mm, vma, address, write_access) & (~VM_FAULT_WRITE);
@@ -811,14 +876,18 @@ int __pte_alloc_kernel(pmd_t *pmd, unsigned long address);
  * Remove it when 4level-fixup.h has been removed.
  */
 #if defined(CONFIG_MMU) && !defined(__ARCH_HAS_4LEVEL_HACK)
+/*分配pud页，返回address对应的pud页表项的虚拟地址*/
 static inline pud_t *pud_alloc(struct mm_struct *mm, pgd_t *pgd, unsigned long address)
 {
+	/*分配pud页，并将pud页首个pud项物理地址与PAGE_TABLE组合后放到pgd指向的页表项*/ 
 	return (unlikely(pgd_none(*pgd)) && __pud_alloc(mm, pgd, address))?
 		NULL: pud_offset(pgd, address);
 }
 
+/*分配pmd页，返回address对应的pmd页表项的虚拟地址*/ 
 static inline pmd_t *pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address)
 {
+	/*分配pmd页，并将pmd页首个pmd项物理地址与PAGE_TABLE组合后放到pud指向的页表项*/
 	return (unlikely(pud_none(*pud)) && __pmd_alloc(mm, pud, address))?
 		NULL: pmd_offset(pud, address);
 }
@@ -933,6 +1002,16 @@ extern unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
 	unsigned long len, unsigned long prot,
 	unsigned long flag, unsigned long pgoff);
 
+/*
+ * 文件映射或匿名映射,如果是匿名映射则file与pgoff为空
+ *
+ * @file: 表示新的线性区将把一个文件映射到内存
+ * @offset：文件内的偏移量，要映射文件部分的第一个字符 
+ * @addr: 指定从何处开始查找一个空闲的线性区
+ * @len: 线性地址区间的长度
+ * @prot: 这个线性区所包含页的权限
+ * @flag: 指定线性区的其它标志
+ */
 static inline unsigned long do_mmap(struct file *file, unsigned long addr,
 	unsigned long len, unsigned long prot,
 	unsigned long flag, unsigned long offset)
@@ -992,8 +1071,10 @@ extern struct vm_area_struct * find_vma_prev(struct mm_struct * mm, unsigned lon
 
 /* Look up the first VMA which intersects the interval start_addr..end_addr-1,
    NULL if none.  Assume start_addr < end_addr. */
+/*查找一个在给定区间内的线性区相重叠的线性区*/
 static inline struct vm_area_struct * find_vma_intersection(struct mm_struct * mm, unsigned long start_addr, unsigned long end_addr)
 {
+	/*返回vma_end > start_addr的第一个线性区的描述符*/
 	struct vm_area_struct * vma = find_vma(mm,start_addr);
 
 	if (vma && end_addr <= vma->vm_start)

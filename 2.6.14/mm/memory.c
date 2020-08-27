@@ -365,7 +365,13 @@ void print_bad_pte(struct vm_area_struct *vma, pte_t pte, unsigned long vaddr)
  * already present in the new task to be cleared in the whole range
  * covered by this vma.
  */
-
+/*
+ * 拷贝src_pte到dst_pte，一般src_pte为父进程的pte，dst_pte为子进程的pte
+ * @dst_mm: 目标内存描述符，一般为子进程内存描述符
+ * @src_mm: 源内存描述符，一般为父进程内存描述符
+ * @vma: 一般为子进程要拷贝页表项的线性区
+ * @addr： 与页表项对应的地址，一般用于获取pte的index
+ */
 static inline void
 copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 		pte_t *dst_pte, pte_t *src_pte, struct vm_area_struct *vma,
@@ -414,6 +420,7 @@ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 	 * in the parent and the child
 	 */
 	if ((vm_flags & (VM_SHARED | VM_MAYWRITE)) == VM_MAYWRITE) {
+		/*设置src_pte页表项为只读*/
 		ptep_set_wrprotect(src_mm, addr, src_pte);
 		pte = *src_pte;
 	}
@@ -430,6 +437,7 @@ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 	rss[!!PageAnon(page)]++;
 
 out_set_pte:
+	/*将pte设置到子进程dst_pte中，此处pte已经设置为只读*/
 	set_pte_at(dst_mm, addr, dst_pte, pte);
 }
 
@@ -524,7 +532,11 @@ static inline int copy_pud_range(struct mm_struct *dst_mm, struct mm_struct *src
 	} while (dst_pud++, src_pud++, addr = next, addr != end);
 	return 0;
 }
-
+/*
+ * 拷贝页表
+ * @src_mm: 父进程的内存描述符
+ * @vma: 子进程的线性区
+ */
 int copy_page_range(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 		struct vm_area_struct *vma)
 {
@@ -901,6 +913,7 @@ no_page_table:
 	return page;
 }
 
+/*检查地址start开始的页表项是否存在，如果不存在则通过page fault创建page*/
 int get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
 		unsigned long start, int len, int write, int force,
 		struct page **pages, struct vm_area_struct **vmas)
@@ -982,6 +995,7 @@ int get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
 				foll_flags |= FOLL_WRITE;
 
 			cond_resched();
+			/*循环检查当前页表中是否有到物理地址的映射*/
 			while (!(page = follow_page(mm, start, foll_flags))) {
 				int ret;
 				ret = __handle_mm_fault(mm, vma, start,
@@ -1257,6 +1271,13 @@ static inline pte_t maybe_mkwrite(pte_t pte, struct vm_area_struct *vma)
  * but allow concurrent faults), with pte both mapped and locked.
  * We return with mmap_sem still held, but pte unmapped and unlocked.
  */
+/*
+ * 写时复制，copy_mm时会将父进程和子进程的页表项都设置为只读
+ * 无论是父进程或子进程执行写入都会触发page fault，通过此函数执行写时复制
+ * 分配新的page，并修改相应的页表项为对写
+ *
+ * @vma: 父进程和子进程具有相同的vma，vma中保存了线性区原有的读写权限 
+ */
 static int do_wp_page(struct mm_struct *mm, struct vm_area_struct *vma,
 		unsigned long address, pte_t *page_table, pmd_t *pmd,
 		spinlock_t *ptl, pte_t orig_pte)
@@ -1301,6 +1322,7 @@ static int do_wp_page(struct mm_struct *mm, struct vm_area_struct *vma,
 
 	if (unlikely(anon_vma_prepare(vma)))
 		goto oom;
+	/*创建页面,区分零化页面，免除拷贝，调高系统性能*/
 	if (old_page == ZERO_PAGE(address)) {
 		new_page = alloc_zeroed_user_highpage(vma, address);
 		if (!new_page)
@@ -1315,7 +1337,9 @@ static int do_wp_page(struct mm_struct *mm, struct vm_area_struct *vma,
 	/*
 	 * Re-check the pte - we dropped the lock
 	 */
+	/*由于分配页会导致进程阻塞，因此检测pte是否发生改变*/
 	page_table = pte_offset_map_lock(mm, pmd, address, &ptl);
+	/*pte没有发生改变*/
 	if (likely(pte_same(*page_table, orig_pte))) {
 		page_remove_rmap(old_page);
 		if (!PageAnon(old_page)) {
@@ -1323,8 +1347,11 @@ static int do_wp_page(struct mm_struct *mm, struct vm_area_struct *vma,
 			dec_mm_counter(mm, file_rss);
 		}
 		flush_cache_page(vma, address, pfn);
+		/*为新页面创建pte*/
 		entry = mk_pte(new_page, vma->vm_page_prot);
+		/*copy_mm时会将父子进程的页表项设置为只读，此处是恢复页表项原有的读写权限*/
 		entry = maybe_mkwrite(pte_mkdirty(entry), vma);
+		/*设置pte*/
 		ptep_establish(vma, address, page_table, entry);
 		update_mmu_cache(vma, address, entry);
 		lazy_mmu_prot_update(entry);
@@ -1335,7 +1362,9 @@ static int do_wp_page(struct mm_struct *mm, struct vm_area_struct *vma,
 		new_page = old_page;
 		ret |= VM_FAULT_WRITE;
 	}
+	/*与前面get old_page对应*/
 	page_cache_release(new_page);
+	/*表示当前进程不再拥有old_page*/
 	page_cache_release(old_page);
 unlock:
 	pte_unmap_unlock(page_table, ptl);
@@ -1763,7 +1792,8 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
 	struct page *page;
 	spinlock_t *ptl;
 	pte_t entry;
-
+	
+	/*处理写访问*/
 	if (write_access) {
 		/* Allocate our own private page. */
 		pte_unmap(page_table);
@@ -1775,15 +1805,21 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
 			goto oom;
 
 		entry = mk_pte(page, vma->vm_page_prot);
+		/*设置页表项是否为可写*/
 		entry = maybe_mkwrite(pte_mkdirty(entry), vma);
 
+		/*获取address的pte页表项地址*/
 		page_table = pte_offset_map_lock(mm, pmd, address, &ptl);
 		if (!pte_none(*page_table))
 			goto release;
+		/*递增进程的anon_rss*/
 		inc_mm_counter(mm, anon_rss);
+		/*把新页框插入交换相关的结构???*/
 		lru_cache_add_active(page);
 		SetPageReferenced(page);
+		/*加入到反向映射相关???*/
 		page_add_anon_rmap(page, vma, address);
+	/*处理读访问*/
 	} else {
 		/* Map the ZERO_PAGE - vm_page_prot is readonly */
 		page = ZERO_PAGE(address);
@@ -1797,7 +1833,8 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
 		inc_mm_counter(mm, file_rss);
 		page_add_file_rmap(page);
 	}
-
+	
+	/*将pte页表项值entry设置到page_table页表项*/
 	set_pte_at(mm, address, page_table, entry);
 
 	/* No need to invalidate - it was non-present before */
@@ -2012,17 +2049,24 @@ static inline int handle_pte_fault(struct mm_struct *mm,
 	spinlock_t *ptl;
 
 	old_entry = entry = *pte;
+	
+	/*页表项的P位为0*/
 	if (!pte_present(entry)) {
+		/*情形1：页表项p位为0，页表项为0，表示页从未被访问过*/
 		if (pte_none(entry)) {
+			/*页没有映射到一个磁盘文件,匿名映射*/
 			if (!vma->vm_ops || !vma->vm_ops->nopage)
 				return do_anonymous_page(mm, vma, address,
 					pte, pmd, write_access);
+			/*页映射到一个磁盘文件，则vma->vm_ops->nopage非空*/
 			return do_no_page(mm, vma, address,
 					pte, pmd, write_access);
 		}
+		/*情形2：页表项p位为0，D位为1，页属于非线性磁盘映射*/
 		if (pte_file(entry))
 			return do_file_page(mm, vma, address,
 					pte, pmd, write_access, entry);
+		/*情形3：页表项p位为0，D位为0，页表项不为0，进程已经访问过这个页，但是其内容被临时保存在磁盘*/
 		return do_swap_page(mm, vma, address,
 					pte, pmd, write_access, entry);
 	}
@@ -2031,7 +2075,10 @@ static inline int handle_pte_fault(struct mm_struct *mm,
 	spin_lock(ptl);
 	if (unlikely(!pte_same(*pte, entry)))
 		goto unlock;
+
+	/*页表项的P位为0,且进程试图执行写操作*/
 	if (write_access) {
+		/*如果页表项显示页面不可写，则通过do_wp_page确实是否需要执行写时复制*/
 		if (!pte_write(entry))
 			return do_wp_page(mm, vma, address,
 					pte, pmd, ptl, entry);
@@ -2060,6 +2107,12 @@ unlock:
 /*
  * By the time we get here, we already hold the mm semaphore
  */
+/*
+ * @mm: 异常发生时正在CPU上运行的进程的内存描述符 
+ * @vma: 引起异常的线性地址所在线性区的描述符
+ * @address: 引起异常的线性地址
+ * @write_access: 如果task试图向address写，则置为1，如果task试图在address读或执行，则置为0 
+ */
 int __handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 		unsigned long address, int write_access)
 {
@@ -2076,16 +2129,23 @@ int __handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 		return hugetlb_fault(mm, vma, address, write_access);
 
 	pgd = pgd_offset(mm, address);
+	/*分配pud,并将pud地址填充到pgd页表项*/
 	pud = pud_alloc(mm, pgd, address);
 	if (!pud)
 		return VM_FAULT_OOM;
+	/*分配pmd，并将pmd地址填充到pud页表项*/
 	pmd = pmd_alloc(mm, pud, address);
 	if (!pmd)
 		return VM_FAULT_OOM;
+	/*分配pte，并将pte地址填充到pmd页表项*/
 	pte = pte_alloc_map(mm, pmd, address);
 	if (!pte)
 		return VM_FAULT_OOM;
 
+	/*
+	 * 检查address地址所对应的页表项pte，
+	 * 根据pte位决定通过请求调页（访问的页不存在）或写时复制（访问的页标记为只读）分配一个新的页框
+	 */
 	return handle_pte_fault(mm, vma, address, pte, pmd, write_access);
 }
 
@@ -2094,16 +2154,20 @@ int __handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
  * Allocate page upper directory.
  * We've already handled the fast-path in-line.
  */
+/*分配pud页，并将pud页首个pud项物理地址与PAGE_TABLE组合后放到pgd指向的页表项*/
 int __pud_alloc(struct mm_struct *mm, pgd_t *pgd, unsigned long address)
 {
+	/*分配一个新的pud页,返回pud页第一个pud的地址并保存在new*/
 	pud_t *new = pud_alloc_one(mm, address);
 	if (!new)
 		return -ENOMEM;
 
 	spin_lock(&mm->page_table_lock);
+	/*如果pgd页表项已经存在则取消pud页的分配*/
 	if (pgd_present(*pgd))		/* Another has populated it */
 		pud_free(new);
 	else
+		/*转换new为物理地址并与PAGE_TABLE组合赋值给pgd指针指向的页表项*/
 		pgd_populate(mm, pgd, new);
 	spin_unlock(&mm->page_table_lock);
 	return 0;
@@ -2138,6 +2202,7 @@ int __pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address)
 }
 #endif /* __PAGETABLE_PMD_FOLDED */
 
+/*连续分配线性区的所有页面，并锁定在RAM中*/ 
 int make_pages_present(unsigned long addr, unsigned long end)
 {
 	int ret, len, write;
@@ -2152,6 +2217,7 @@ int make_pages_present(unsigned long addr, unsigned long end)
 	if (end > vma->vm_end)
 		BUG();
 	len = (end+PAGE_SIZE-1)/PAGE_SIZE-addr/PAGE_SIZE;
+	/*检查地址addr开始的页表项是否存在，如果不存在则通过page fault创建page*/ 
 	ret = get_user_pages(current, current->mm, addr,
 			len, write, 0, NULL, NULL);
 	if (ret < 0)

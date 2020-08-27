@@ -11,22 +11,40 @@
 /*
  * 高端内存的任一页框都可以通过一个保留的页表项映射到内核地址空间
  * 每个CPU都有它自己的包含13个保留页表项的集合
- * 每一项即是一个固定映射线性地址的下标
+ * 每一个枚举项即是一个固定映射线性地址的下标
  * 参考enum fixed_addresses
  *
- * +--------------+  <---------FIXADDR_TOP （0xfffff000UL)
- * |     ...      | 
- * +--------------+  <----------------------------------------- FIXADDR_TOP-(FIX_KMAP_BEGIN  <<PAGE_SHIFT)
- * |              |  <----- FIXADDR_TOP-((FIX_KMAP_BEGIN+KM_BOUNCE_READ)      <<PAGE_SHIFT)
- * |              |  <----- FIXADDR_TOP-((FIX_KMAP_BEGIN+KM_SKB_SUNRPC_DATA)  <<PAGE_SHIFT)
- * |              |
- * |              |  ......
- * |		  |
- * |              |
- * |              |  <----- FIXADDR_TOP-((FIX_KMAP_BEGIN+KM_SOFTIRQ1) 	      <<PAGE_SHIFT)
- * +--------------+  <----------------------------------------- FIXADDR_TOP-(FIX_KMAP_END  <<PAGE_SHIFT)
- * |     ...      |
- * +--------------+  <---------FIXADDR_BOOT_START
+ * ----+--------------+  <---------FIXADDR_TOP （0xfffff000UL)
+ *  ^  |     ...      | 
+ *  | -+--------------+  <----------------------------------------- FIXADDR_TOP-(FIX_KMAP_BEGIN  <<PAGE_SHIFT)
+ *  | ^|              |  <----- FIXADDR_TOP-((FIX_KMAP_BEGIN+KM_BOUNCE_READ)      <<PAGE_SHIFT)
+ *  | ||              |  <----- FIXADDR_TOP-((FIX_KMAP_BEGIN+KM_SKB_SUNRPC_DATA)  <<PAGE_SHIFT)
+ * 固临|              |
+ * 定时|              |  ......
+ * 映映|              |
+ * 射射|              |
+ *  | ||              |
+ *  | v|              |  <----- FIXADDR_TOP-((FIX_KMAP_BEGIN+KM_SOFTIRQ1)            <<PAGE_SHIFT)
+ *  | -+--------------+  <----------------------------------------- FIXADDR_TOP-(FIX_KMAP_END  <<PAGE_SHIFT)
+ *  v  |     ...      |
+ * ----+--------------+  <---------FIXADDR_BOOT_START
+ *     |              |  
+ *     |   永久映射   |
+ *     |              |
+ *     +--------------+  <---------PKMAP_BASE
+ *     |      8kb     |
+ *     +--------------+  <---------VMALLOC_END
+ *     |  vmalloc区   |
+ *     +--------------+
+ *     |      4kb     |
+ *     +--------------+
+ *     |  vmalloc区   |
+ *     +--------------+  <---------VMALLOC_START
+ *     |      8MB     |
+ *     +--------------+  <---------high memory
+ *     | 物理内存映射 | 
+ *     +--------------+  <---------PAGE_OFFSET
+ *
  *
  * NOTE: FIXADDR_TOP~FIXADDR_BOOT_START为固定映射区
  */
