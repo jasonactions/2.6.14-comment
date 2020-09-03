@@ -43,17 +43,27 @@ static inline int current_is_kswapd(void)
  * For 2.5 we'll probably want to move the magic to just beyond the
  * bootbits...
  */
+/*
+ * 交换区的第0个页槽用来永久存放有关交换区的信息，由swap_header描述
+ * 第1个可用页槽的索引为1
+ */
 union swap_header {
 	struct {
 		char reserved[PAGE_SIZE - 10];
+		/*用来把磁盘某部分明确标记为交换区，一般位于第一个页槽的末尾*/
 		char magic[10];			/* SWAP-SPACE or SWAPSPACE2 */
 	} magic;
 	struct {
+		/*交换算法不使用该字段。该字段对应于交换区的第一个1024字节，可以存放分区数据、磁盘标签等*/
 		char	     bootbits[1024];	/* Space for disklabel etc. */
+		/*交换算法的版本*/
 		unsigned int version;
+		/*可有效使用的最后一个页槽*/
 		unsigned int last_page;
+		/*有缺陷的页槽的个数*/
 		unsigned int nr_badpages;
 		unsigned int padding[125];
+		/*一共有637个数字，用来指定有缺陷页槽的位置*/
 		unsigned int badpages[1];
 	} info;
 };
@@ -89,10 +99,18 @@ struct zone;
  *
  * We always assume that blocks are of size PAGE_SIZE.
  */
+/*
+ * 交换子区描述符
+ * 每个交换区有一个或多个交换子区组成，每个子区对应一组页槽，他们在磁盘上物理相邻
+ * 存放在磁盘分区的交换区只有一个子区，存放在普通文件的交换区可以有多个子区
+ */
 struct swap_extent {
 	struct list_head list;
+	/*交换子区首页索引*/
 	pgoff_t start_page;
+	/*子区的页数*/
 	pgoff_t nr_pages;
+	/*起始磁盘扇区号*/
 	sector_t start_block;
 };
 
@@ -104,7 +122,9 @@ struct swap_extent {
 	((__swapoffset(magic.magic) - __swapoffset(info.badpages)) / sizeof(int))
 
 enum {
+	/*如果交换区是活动的，值为1，不是活动的值为0*/
 	SWP_USED	= (1 << 0),	/* is slot in swap_info[] used? */
+	/*如果交换区可写，值为1，只读值为0*/
 	SWP_WRITEOK	= (1 << 1),	/* ok to write to this swap?	*/
 	SWP_ACTIVE	= (SWP_USED | SWP_WRITEOK),
 					/* add others here before... */
@@ -113,33 +133,60 @@ enum {
 
 #define SWAP_CLUSTER_MAX 32
 
+/*交换区页槽最大引用计数*/
 #define SWAP_MAP_MAX	0x7fff
+/*交换区坏的页槽标识*/
 #define SWAP_MAP_BAD	0x8000
 
 /*
  * The in-memory structure used to track swap areas.
  */
+/*交换区描述符,swap_info数组包含MAX_SWAPFILES个交换区描述符*/
 struct swap_info_struct {
+	/*交换区标志*/
 	unsigned int flags;
+	/*交换区优先级,交换子系统依据这个值考虑每个交换区的次序*/
 	int prio;			/* swap priority */
+	/*指向存放交换区的普通文件或设备文件的文件对象*/
 	struct file *swap_file;
+	/*存放交换区的块设备描述符*/
 	struct block_device *bdev;
+	/*组成交换区的子区链表头*/
 	struct list_head extent_list;
+	/*指向最近使用的子区描述符*/
 	struct swap_extent *curr_swap_extent;
+	/*存放交换区的磁盘分区自然块大小*/
 	unsigned old_block_size;
+	/*
+	 * 指向计数器数组的指针，交换区的每个页槽对应一个数组元素
+	 * 它的值表示共享此换出页的进程数，为0表示页槽空闲，正数表示有换出页填充了此页槽
+	 * 值为SWAP_MAY_MAX(32767)表示存放在这个页槽中的页时永久的，不能从页槽中删除
+	 * 值为SWAP_MAP_BAD（32768）表示这个页槽有缺陷，不可用
+	 */
 	unsigned short * swap_map;
+	/*在搜索一个空闲页槽时要扫描的第一个页槽*/
 	unsigned int lowest_bit;
+	/*在搜索一个空闲页槽时要扫描的最后一个页槽*/
 	unsigned int highest_bit;
+	/*在搜索一个空闲页槽时要扫描的下一个页槽*/
 	unsigned int cluster_next;
+	/*在从头重新开始扫描之前空闲页槽的分配次数???*/
 	unsigned int cluster_nr;
+	/*可用页槽的个数*/
 	unsigned int pages;
+	/*交换区大小，单位：页*/
 	unsigned int max;
+	/*交换区内已用页槽数*/
 	unsigned int inuse_pages;
+	/*指向下一个交换区描述符的指针,即swap_info数组的下标索引*/
 	int next;			/* next entry on swap list */
 };
 
+/*交换区链表描述符，交换区数组swap_info中各交换区会组成一个链表，由交换区描述符的next进行连接*/
 struct swap_list_t {
+	/*各交换区会组成一个链表，此为链表第一个元素在swap_info数组中的下标*/
 	int head;	/* head of priority-ordered swapfile list */
+	/*为换出页选中的下一个交换区的描述符在swap_info数组中的下标*/
 	int next;	/* swapfile to be used next */
 };
 
@@ -233,6 +280,7 @@ static inline int has_swap_token(struct mm_struct *mm)
 	return (mm == swap_token_mm);
 }
 
+/*如果进程的mm拥有交换标记，则清除交换标记*/
 static inline void put_swap_token(struct mm_struct *mm)
 {
 	if (has_swap_token(mm))

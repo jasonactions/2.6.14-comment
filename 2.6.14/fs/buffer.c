@@ -506,7 +506,9 @@ static void free_more_memory(void)
 	struct zone **zones;
 	pg_data_t *pgdat;
 
+	/*唤醒一个pdflush线程，触发高速缓存中1024个脏页的写操作*/
 	wakeup_pdflush(1024);
+	/*让出处理器，给pdflush线程执行提供机会*/
 	yield();
 
 	for_each_pgdat(pgdat) {
@@ -3063,6 +3065,7 @@ failed:
 	return 0;
 }
 
+/*释放page对应的所有的buffer_head*/ 
 int try_to_free_buffers(struct page *page)
 {
 	struct address_space * const mapping = page->mapping;

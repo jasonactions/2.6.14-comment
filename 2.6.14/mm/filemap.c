@@ -480,6 +480,7 @@ void end_page_writeback(struct page *page)
 			BUG();
 	}
 	smp_mb__after_clear_bit();
+	/*唤醒等待PG_writeback标志清零的所有进程*/
 	wake_up_page(page, PG_writeback);
 }
 EXPORT_SYMBOL(end_page_writeback);

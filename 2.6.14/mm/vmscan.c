@@ -51,27 +51,36 @@ typedef enum {
 	PAGE_CLEAN,
 } pageout_t;
 
+/*存放回收操作执行时的信息*/
 struct scan_control {
 	/* Ask refill_inactive_zone, or shrink_cache to scan this many pages */
+	/*活动链表中待扫描的目标页数*/
 	unsigned long nr_to_scan;
 
+	/*当前迭代中扫描过的非活动页数*/
 	/* Incremented by the number of inactive pages that were scanned */
 	unsigned long nr_scanned;
 
+	/*当前迭代中回收的页数*/
 	/* Incremented by the number of pages reclaimed */
 	unsigned long nr_reclaimed;
 
+	/*用户态地址空间引用的页数*/
 	unsigned long nr_mapped;	/* From page_state */
 
 	/* How many pages shrink_cache() should reclaim */
+	/*待回收的目标页数*/
 	int nr_to_reclaim;
 
 	/* Ask shrink_caches, or shrink_zone to scan at this priority */
+	/*扫描优先级，范围从12~0(低值表示高优先级)，低优先级表示扫描更多的页*/
 	unsigned int priority;
 
 	/* This context's GFP mask */
+	/*调用进程传来的GFP掩码*/
 	gfp_t gfp_mask;
 
+	/*如果置位，则允许将脏页写到磁盘*/
 	int may_writepage;
 
 	/* Can pages be swapped as part of reclaim? */
@@ -186,6 +195,7 @@ EXPORT_SYMBOL(remove_shrinker);
  *
  * Returns the number of slab objects which we shrunk.
  */
+/*从可收缩内核高速缓存中回收页,一般被try_to_free_pages()和balance_pgdat调用*/ 
 static int shrink_slab(unsigned long scanned, gfp_t gfp_mask,
 			unsigned long lru_pages)
 {
@@ -202,6 +212,9 @@ static int shrink_slab(unsigned long scanned, gfp_t gfp_mask,
 		unsigned long long delta;
 		unsigned long total_scan;
 
+		/* 为了实现在页高速缓存和收缩器缓存之间的均衡：
+		 * delta = 可回收页数 x ((4 x 32) / seeks / (lru_pages + 1)) 
+		 */
 		delta = (4 * scanned) / shrinker->seeks;
 		delta *= (*shrinker->shrinker)(0, gfp_mask);
 		do_div(delta, lru_pages + 1);
@@ -217,11 +230,14 @@ static int shrink_slab(unsigned long scanned, gfp_t gfp_mask,
 			int shrink_ret;
 			int nr_before;
 
+			/*获取可回收页框数*/
 			nr_before = (*shrinker->shrinker)(0, gfp_mask);
+			/*释放对象，返回可回收页框数*/
 			shrink_ret = (*shrinker->shrinker)(this_scan, gfp_mask);
 			if (shrink_ret == -1)
 				break;
 			if (shrink_ret < nr_before)
+				/*累加已回收的项数*/
 				ret += nr_before - shrink_ret;
 			mod_page_state(slabs_scanned, this_scan);
 			total_scan -= this_scan;
@@ -302,6 +318,7 @@ static void handle_write_error(struct address_space *mapping,
 /*
  * pageout is called by shrink_list() for each dirty page. Calls ->writepage().
  */
+/*将page写回到磁盘*/
 static pageout_t pageout(struct page *page, struct address_space *mapping)
 {
 	/*
@@ -321,6 +338,7 @@ static pageout_t pageout(struct page *page, struct address_space *mapping)
 	 * congestion state of the swapdevs.  Easy to fix, if needed.
 	 * See swapfile.c:page_queue_congested().
 	 */
+	/*如果page->_count引用计数为2，两个拥有者分别是页高速缓存(或交换高速缓存)和页框回收进程自己,则可以写回*/
 	if (!is_page_cache_freeable(page))
 		return PAGE_KEEP;
 	if (!mapping) {
@@ -329,6 +347,7 @@ static pageout_t pageout(struct page *page, struct address_space *mapping)
 		 * page->mapping == NULL while being dirty with clean buffers.
 		 */
 		if (PagePrivate(page)) {
+			/*释放page对应的所有的buffer_head*/ 
 			if (try_to_free_buffers(page)) {
 				ClearPageDirty(page);
 				printk("%s: orphaned page\n", __FUNCTION__);
@@ -342,6 +361,7 @@ static pageout_t pageout(struct page *page, struct address_space *mapping)
 	if (!may_write_to_queue(mapping->backing_dev_info))
 		return PAGE_KEEP;
 
+	/*如果页面仍为dirty*/
 	if (clear_page_dirty_for_io(page)) {
 		int res;
 		struct writeback_control wbc = {
@@ -352,6 +372,10 @@ static pageout_t pageout(struct page *page, struct address_space *mapping)
 		};
 
 		SetPageReclaim(page);
+		/*
+		 * 执行页面写入
+		 * 注：对交换高速缓存是由swap_writepage函数执行
+		 */
 		res = mapping->a_ops->writepage(page, &wbc);
 		if (res < 0)
 			handle_write_error(mapping, page, res);
@@ -373,8 +397,13 @@ static pageout_t pageout(struct page *page, struct address_space *mapping)
 /*
  * shrink_list adds the number of reclaimed pages to sc->nr_reclaimed
  */
+/*对一组候选页链表page_list执行回收，执行的最后将不可回收的页面放入page_list返回*/
 static int shrink_list(struct list_head *page_list, struct scan_control *sc)
 {
+	/*
+	 * 用于存放page_list不可回收页面的临时链表，最后会转移到page_list链表,
+	 * 这样page_list链表中存放的就是不可回收的页面
+	 */
 	LIST_HEAD(ret_pages);
 	struct pagevec freed_pvec;
 	int pgactivate = 0;
@@ -391,9 +420,11 @@ static int shrink_list(struct list_head *page_list, struct scan_control *sc)
 
 		cond_resched();
 
+		/*获取page_list最后一个元素（最长为时间未访问）*/
 		page = lru_to_page(page_list);
 		list_del(&page->lru);
 
+		/*锁定页面不可回收*/
 		if (TestSetPageLocked(page))
 			goto keep;
 
@@ -404,9 +435,11 @@ static int shrink_list(struct list_head *page_list, struct scan_control *sc)
 		if (page_mapped(page) || PageSwapCache(page))
 			sc->nr_scanned++;
 
+		/*写回页面不可回收*/
 		if (PageWriteback(page))
 			goto keep_locked;
 
+		/*获取页面的referenced*/
 		referenced = page_referenced(page, 1, sc->priority <= 0);
 		/* In active use or really unfreeable?  Activate it. */
 		if (referenced && page_mapping_inuse(page))
@@ -433,7 +466,9 @@ static int shrink_list(struct list_head *page_list, struct scan_control *sc)
 		 * The page is mapped into the page tables of one or more
 		 * processes. Try to unmap it here.
 		 */
+		/*page位于用户态地址空间*/
 		if (page_mapped(page) && mapping) {
+			/*清除所有引用页框page的页表项*/
 			switch (try_to_unmap(page)) {
 			case SWAP_FAIL:
 				goto activate_locked;
@@ -444,6 +479,10 @@ static int shrink_list(struct list_head *page_list, struct scan_control *sc)
 			}
 		}
 
+		/*
+		 * 如果page是dirty，则写回
+		 * 注：对于页交换高速缓存，是在add_to_swap时将dirty置位
+		 */
 		if (PageDirty(page)) {
 			if (referenced)
 				goto keep_locked;
@@ -496,6 +535,7 @@ static int shrink_list(struct list_head *page_list, struct scan_control *sc)
 		 * process address space (page_count == 1) it can be freed.
 		 * Otherwise, leave the page on the LRU so it is swappable.
 		 */
+		/*如果包含VFS缓冲区，释放page对应的buffer_head,如果成功则释放page*/
 		if (PagePrivate(page)) {
 			if (!try_to_release_page(page, sc->gfp_mask))
 				goto activate_locked;
@@ -520,8 +560,10 @@ static int shrink_list(struct list_head *page_list, struct scan_control *sc)
 			goto cannot_free;
 
 #ifdef CONFIG_SWAP
+		/*如果page位于交换高速缓存,何时写入交换文件???*/
 		if (PageSwapCache(page)) {
 			swp_entry_t swap = { .val = page_private(page) };
+			/*如果页框没有进程试图访问，则从交换高速缓存中删除*/
 			__delete_from_swap_cache(page);
 			write_unlock_irq(&mapping->tree_lock);
 			swap_free(swap);
@@ -537,6 +579,7 @@ static int shrink_list(struct list_head *page_list, struct scan_control *sc)
 free_it:
 		unlock_page(page);
 		reclaimed++;
+		/*对freed_pvec执行free_hot_cold_page()释放到per-cpu高速缓存*/
 		if (!pagevec_add(&freed_pvec, page))
 			__pagevec_release_nonlru(&freed_pvec);
 		continue;
@@ -579,6 +622,13 @@ keep:
  *
  * returns how many pages were moved onto *@dst.
  */
+/*
+ * 处理src链表中的页（最多32页），从从src链表分离出空闲page放入dst链表，返回dst链表个数
+ * @src: 源page链表，如：zone->active_list
+ * @dst: 目的链表，用于存放分离的page
+ * @nr_to_scan: 要扫描的page个数
+ * @sanned: 实际扫描的page个数
+ */
 static int isolate_lru_pages(int nr_to_scan, struct list_head *src,
 			     struct list_head *dst, int *scanned)
 {
@@ -587,21 +637,30 @@ static int isolate_lru_pages(int nr_to_scan, struct list_head *src,
 	int scan = 0;
 
 	while (scan++ < nr_to_scan && !list_empty(src)) {
+		/*获取src链表的最后一个page*/
 		page = lru_to_page(src);
+		/*???*/
 		prefetchw_prev_lru_page(page, src, flags);
-
+	
+		/*请page->flags的PG_lru，并返回原来PG_lru是否置位*/
 		if (!TestClearPageLRU(page))
 			BUG();
+		/*将page从src链表删除*/
 		list_del(&page->lru);
+		/*page是否空闲，>0则非空闲*/
 		if (get_page_testone(page)) {
 			/*
 			 * It is being freed elsewhere
 			 */
+			/*减少page的引用计数*/
 			__put_page(page);
 			SetPageLRU(page);
+			/*将page重新加回src链表*/
 			list_add(&page->lru, src);
 			continue;
+		/*如果page是空闲*/
 		} else {
+			/*放入dst链表*/
 			list_add(&page->lru, dst);
 			nr_taken++;
 		}
@@ -630,6 +689,7 @@ static void shrink_cache(struct zone *zone, struct scan_control *sc)
 		int nr_scan;
 		int nr_freed;
 
+		/*处理zone->inactive_list中的页（最多32页），从中分离出空闲page放入page_list链表，返回page_list链表元素个数*/
 		nr_taken = isolate_lru_pages(sc->swap_cluster_max,
 					     &zone->inactive_list,
 					     &page_list, &nr_scan);
@@ -645,6 +705,7 @@ static void shrink_cache(struct zone *zone, struct scan_control *sc)
 			mod_page_state_zone(zone, pgscan_kswapd, nr_scan);
 		else
 			mod_page_state_zone(zone, pgscan_direct, nr_scan);
+		/*从page_list回收*/
 		nr_freed = shrink_list(&page_list, sc);
 		if (current_is_kswapd())
 			mod_page_state(kswapd_steal, nr_freed);
@@ -655,6 +716,7 @@ static void shrink_cache(struct zone *zone, struct scan_control *sc)
 		/*
 		 * Put back any unfreeable pages.
 		 */
+		/*将page_list中无法回收的页面放回到active_list链表或inactive_list链表*/
 		while (!list_empty(&page_list)) {
 			page = lru_to_page(&page_list);
 			if (TestSetPageLRU(page))
@@ -693,6 +755,7 @@ done:
  * The downside is that we have to touch page->_count against each page.
  * But we had to alter page->flags anyway.
  */
+/*将page从active链表转移到inactive链表*/
 static void
 refill_inactive_zone(struct zone *zone, struct scan_control *sc)
 {
@@ -710,11 +773,19 @@ refill_inactive_zone(struct zone *zone, struct scan_control *sc)
 	long distress;
 	long swap_tendency;
 
+	/*把仍留在pagevec数据结构中的所有页移入活动与非活动链表*/
 	lru_add_drain();
 	spin_lock_irq(&zone->lru_lock);
+
+	/*
+	 * 从zone->active_list链表分离出空闲page放入l_hold链表，pgmoved保存返回的l_hold链表个数
+	 * pgscanned保存实际扫描的page数目
+	 */
 	pgmoved = isolate_lru_pages(nr_pages, &zone->active_list,
 				    &l_hold, &pgscanned);
+	/*增加zone上扫描的page数目*/
 	zone->pages_scanned += pgscanned;
+	/*减少zone->active_list链表中page数目*/
 	zone->nr_active -= pgmoved;
 	spin_unlock_irq(&zone->lru_lock);
 
@@ -722,12 +793,24 @@ refill_inactive_zone(struct zone *zone, struct scan_control *sc)
 	 * `distress' is a measure of how much trouble we're having reclaiming
 	 * pages.  0 -> no problems.  100 -> great trouble.
 	 */
+	/*
+	 * distress表示内存回收时遇到多大的麻烦，100表示麻烦最大，0表示没有麻烦
+	 * 它与上一次的扫描优先级prev_priority有关(值越小，优先级越高，表示越倾向于回收)，
+	 * prev_priority与distress对应关系如下：
+	 * prev_priority    12...7   6   5   4   3   2   1   0
+	 * distress         0        1   3   6   12  25  50  100
+	 * 注：优先级值越小，则优先级越高->distress值越大 -> swap_tendency越大 -> 回收的工作量越大 -> 麻烦越大
+	 */
 	distress = 100 >> zone->prev_priority;
 
 	/*
 	 * The point of this algorithm is to decide when to start reclaiming
 	 * mapped memory instead of just pagecache.  Work out how much memory
 	 * is mapped.
+	 */
+	/*
+	 * mapped_ratio映射比率是用户态地址空间所有内存管理区的页（sc->nr_mapped）占所有可分配页框的百分比
+	 *             mapped_ratio值大表示动态内存大部分时间用于用户态进程，值小表示大部分用于页高速缓存 
 	 */
 	mapped_ratio = (sc->nr_mapped * 100) / total_memory;
 
@@ -740,20 +823,29 @@ refill_inactive_zone(struct zone *zone, struct scan_control *sc)
 	 *
 	 * A 100% value of vm_swappiness overrides this algorithm altogether.
 	 */
+	/*
+	 * swap_tendency用户交换倾向值决定移动所有页框还是只移动不属于用户态地址空间的页
+	 *
+	 * vm_swappiness是用户定义常数，通常为60，可以通过/proc/sys/vm/swappiniess设置，
+	 *              决定在用户空间的匿名页和映射页哪个回收多一点，值越高则回收映射页多一些
+	 */
 	swap_tendency = mapped_ratio / 2 + distress + vm_swappiness;
 
 	/*
 	 * Now use this metric to decide whether to start moving mapped memory
 	 * onto the inactive list.
 	 */
+	/*swap_tendency越高越倾向于回收*/
 	if (swap_tendency >= 100)
 		reclaim_mapped = 1;
 
+	/*遍历l_hold链表，将其分别放到l_inactive和l_active链表*/
 	while (!list_empty(&l_hold)) {
 		cond_resched();
 		page = lru_to_page(&l_hold);
 		list_del(&page->lru);
 		if (page_mapped(page)) {
+			/*swap_tendency<100 或 匿名页没有激活交换区 或 page_referenced返回整数,放入l_active*/
 			if (!reclaim_mapped ||
 			    (total_swap_pages == 0 && PageAnon(page)) ||
 			    page_referenced(page, 0, sc->priority <= 0)) {
@@ -761,12 +853,14 @@ refill_inactive_zone(struct zone *zone, struct scan_control *sc)
 				continue;
 			}
 		}
+		/*其它情况放入l_inactive*/
 		list_add(&page->lru, &l_inactive);
 	}
 
 	pagevec_init(&pvec, 1);
 	pgmoved = 0;
 	spin_lock_irq(&zone->lru_lock);
+	/*遍历l_inactive链表,将page移入zone->inactive_list*/
 	while (!list_empty(&l_inactive)) {
 		page = lru_to_page(&l_inactive);
 		prefetchw_prev_lru_page(page, &l_inactive, flags);
@@ -774,6 +868,7 @@ refill_inactive_zone(struct zone *zone, struct scan_control *sc)
 			BUG();
 		if (!TestClearPageActive(page))
 			BUG();
+		/*将page移入zone->inactive_list链表*/
 		list_move(&page->lru, &zone->inactive_list);
 		pgmoved++;
 		if (!pagevec_add(&pvec, page)) {
@@ -783,6 +878,7 @@ refill_inactive_zone(struct zone *zone, struct scan_control *sc)
 			pgmoved = 0;
 			if (buffer_heads_over_limit)
 				pagevec_strip(&pvec);
+			/*此处会再次加入inactive_list???*/
 			__pagevec_release(&pvec);
 			spin_lock_irq(&zone->lru_lock);
 		}
@@ -796,6 +892,7 @@ refill_inactive_zone(struct zone *zone, struct scan_control *sc)
 	}
 
 	pgmoved = 0;
+	/*遍历l_active链表，将page移入zone->active_list*/
 	while (!list_empty(&l_active)) {
 		page = lru_to_page(&l_active);
 		prefetchw_prev_lru_page(page, &l_active, flags);
@@ -835,15 +932,31 @@ shrink_zone(struct zone *zone, struct scan_control *sc)
 	 * Add one to `nr_to_scan' just to make sure that the kernel will
 	 * slowly sift through the active list.
 	 */
+	/*
+	 * 更新zone中要扫描的active_list链表中的页数，随着sc->priority的减少会逐渐增加
+	 * 每次加1是为了确保sc->priority为0时，仍能缓慢更新
+	 */
 	zone->nr_scan_active += (zone->nr_active >> sc->priority) + 1;
 	nr_active = zone->nr_scan_active;
+	/*
+	 * 如果要扫描的页数nr_scan_active>=sc->swap_cluster_max则通过refill_inactive_zone增加inactive_list
+	 * 否则，只是将要扫描页面保存在zone->nr_scan_active中，下次函数执行时再处理
+	 */
 	if (nr_active >= sc->swap_cluster_max)
 		zone->nr_scan_active = 0;
 	else
 		nr_active = 0;
 
+	/*
+	 * 更新zone中要扫描的inactive_list链表中的页数,随着sc->priority的减少会逐渐增加
+	 * 每次加1是为了确保sc->priority为0时，仍能缓慢更新
+	 */ 
 	zone->nr_scan_inactive += (zone->nr_inactive >> sc->priority) + 1;
 	nr_inactive = zone->nr_scan_inactive;
+	/*
+	 * 如果要扫描的页数nr_scan_inactive>=sc->swap_cluster_max则通过shrink_cache回收32页
+	 * 否则，只是将要扫描页面保存在zone->nr_scan_inactive中，下次函数执行时再处理
+	 */
 	if (nr_inactive >= sc->swap_cluster_max)
 		zone->nr_scan_inactive = 0;
 	else
@@ -856,6 +969,7 @@ shrink_zone(struct zone *zone, struct scan_control *sc)
 			sc->nr_to_scan = min(nr_active,
 					(unsigned long)sc->swap_cluster_max);
 			nr_active -= sc->nr_to_scan;
+			/*将sc->nr_to_scan个page从active链表转移到inactive链表*/ 
 			refill_inactive_zone(zone, sc);
 		}
 
@@ -863,7 +977,9 @@ shrink_zone(struct zone *zone, struct scan_control *sc)
 			sc->nr_to_scan = min(nr_inactive,
 					(unsigned long)sc->swap_cluster_max);
 			nr_inactive -= sc->nr_to_scan;
+			/*在zone->inactive_list链表中扫描sc->nr_to_scan个page，执行回收*/
 			shrink_cache(zone, sc);
+			/*成功回收到32页*/
 			if (sc->nr_to_reclaim <= 0)
 				break;
 		}
@@ -890,6 +1006,7 @@ shrink_zone(struct zone *zone, struct scan_control *sc)
  * If a zone is deemed to be full of pinned pages then just give it a light
  * scan then give up on it.
  */
+/*对管理区的每个zone调用shrink_zone回收*/
 static void
 shrink_caches(struct zone **zones, struct scan_control *sc)
 {
@@ -904,7 +1021,14 @@ shrink_caches(struct zone **zones, struct scan_control *sc)
 		if (!cpuset_zone_allowed(zone, __GFP_HARDWALL))
 			continue;
 
+		/*更新当前扫描优先级*/
 		zone->temp_priority = sc->priority;
+		/*
+		 * 如果上次扫描优先级值(zone->prev_priority)大于当前优先级值(zone->temp_priority)，
+		 * 使用本次优先级值(zone->temp_priority)更新到上次优先级值(zone->prev_priority)以降低回收难度
+		 * 注：zone->temp_priority值越小，distress越大，swap_tendency越大,
+		 *     进入zone->inactive_list的页面越多，回收越容易
+		 */
 		if (zone->prev_priority > sc->priority)
 			zone->prev_priority = sc->priority;
 
@@ -944,6 +1068,7 @@ int try_to_free_pages(struct zone **zones, gfp_t gfp_mask)
 
 	inc_page_state(allocstall);
 
+	/*遍历当前node的所有zone，累加位于活动/非活动链表的所有页面*/
 	for (i = 0; zones[i] != NULL; i++) {
 		struct zone *zone = zones[i];
 
@@ -951,23 +1076,35 @@ int try_to_free_pages(struct zone **zones, gfp_t gfp_mask)
 			continue;
 
 		zone->temp_priority = DEF_PRIORITY;
+		/*加位于活动/非活动链表的所有页面*/
 		lru_pages += zone->nr_active + zone->nr_inactive;
 	}
 
+	/*
+	 * 通过shrink_caches和shrink_slab来释放32个页面，每次调用优先级不断提高
+	 * 注：数值越小，优先级越高，swap_tendency越大，加入zone->inactive_list页面越多
+	 */
 	for (priority = DEF_PRIORITY; priority >= 0; priority--) {
+		/*获取用户态进程的总页数*/
 		sc.nr_mapped = read_page_state(nr_mapped);
 		sc.nr_scanned = 0;
 		sc.nr_reclaimed = 0;
+		/*设置本次迭代的优先级,优先级越来越高*/
 		sc.priority = priority;
+		/*要回收的页数*/
 		sc.swap_cluster_max = SWAP_CLUSTER_MAX;
+		/*扫描管理区的非活动页,对管理区的每个zone调用shrink_zone回收*/
 		shrink_caches(zones, &sc);
+		/*从可压缩内核高速缓存中回收页???*/
 		shrink_slab(sc.nr_scanned, gfp_mask, lru_pages);
 		if (reclaim_state) {
+			/*记录当前迭代中回收的页*/
 			sc.nr_reclaimed += reclaim_state->reclaimed_slab;
 			reclaim_state->reclaimed_slab = 0;
 		}
 		total_scanned += sc.nr_scanned;
 		total_reclaimed += sc.nr_reclaimed;
+		/*如果已经回收32个页面则退出*/
 		if (total_reclaimed >= sc.swap_cluster_max) {
 			ret = 1;
 			goto out;
@@ -980,12 +1117,14 @@ int try_to_free_pages(struct zone **zones, gfp_t gfp_mask)
 		 * that's undesirable in laptop mode, where we *want* lumpy
 		 * writeout.  So in laptop mode, write out the whole world.
 		 */
+		/*如果已经扫描32+32/2都没有达成回收32页的目标，则唤醒pdflush线程,将页高速缓存中的脏页写入磁盘*/
 		if (total_scanned > sc.swap_cluster_max + sc.swap_cluster_max/2) {
 			wakeup_pdflush(laptop_mode ? 0 : total_scanned);
 			sc.may_writepage = 1;
 		}
 
 		/* Take a nap, wait for some writeback to complete */
+		/*如果扫描四次未达成目标，则挂起进程，直到请求队列WRITE不在阻塞或超时100ms*/
 		if (sc.nr_scanned && priority < DEF_PRIORITY - 2)
 			blk_congestion_wait(WRITE, HZ/10);
 	}
@@ -995,7 +1134,7 @@ out:
 
 		if (!cpuset_zone_allowed(zone, __GFP_HARDWALL))
 			continue;
-
+		/*记录上一次调用shrink_caches时使用的优先级*/
 		zone->prev_priority = zone->temp_priority;
 	}
 	return ret;
@@ -1026,6 +1165,10 @@ out:
  * the page allocator fallback scheme to ensure that aging of pages is balanced
  * across the zones.
  */
+/*
+ * 为kswapd回收节点的内存，直到节点的zone的水位都在pages_high以上
+ * @nr_pages:要回收的页框数, 如果为0则回收zone到水位在pages_high以上 
+ */
 static int balance_pgdat(pg_data_t *pgdat, int nr_pages, int order)
 {
 	int to_free = nr_pages;
@@ -1046,18 +1189,21 @@ loop_again:
 
 	inc_page_state(pageoutrun);
 
+	/*初始化所有zone的当前优先级*/
 	for (i = 0; i < pgdat->nr_zones; i++) {
 		struct zone *zone = pgdat->node_zones + i;
 
 		zone->temp_priority = DEF_PRIORITY;
 	}
-
+	
+	/*优先级递减进行回收，优先级可参考refill_inactive_zone*/
 	for (priority = DEF_PRIORITY; priority >= 0; priority--) {
 		int end_zone = 0;	/* Inclusive.  0 = ZONE_DMA */
 		unsigned long lru_pages = 0;
 
 		all_zones_ok = 1;
-
+		
+		/*如果nr_pages为0，则只扫描低于水位的zone,回收32页*/
 		if (nr_pages == 0) {
 			/*
 			 * Scan in the highmem->dma direction for the highest
@@ -1072,7 +1218,8 @@ loop_again:
 				if (zone->all_unreclaimable &&
 						priority != DEF_PRIORITY)
 					continue;
-
+				
+				/*如果某一zone内存紧缺则对此zone及之前的zone执行扫描*/
 				if (!zone_watermark_ok(zone, order,
 						zone->pages_high, 0, 0, 0)) {
 					end_zone = i;
@@ -1080,10 +1227,12 @@ loop_again:
 				}
 			}
 			goto out;
+		/*如果nr_pages不为0，则扫描所有的zone*/
 		} else {
 			end_zone = pgdat->nr_zones - 1;
 		}
 scan:
+		/*累加所有zone位于active_list和inactive_list的页数，保存到lru_pages*/
 		for (i = 0; i <= end_zone; i++) {
 			struct zone *zone = pgdat->node_zones + i;
 
@@ -1099,6 +1248,7 @@ scan:
 		 * pages behind kswapd's direction of progress, which would
 		 * cause too much scanning of the lower zones.
 		 */
+		/*从dma->highmem的方向执行扫描(与分配的顺序相反)*/
 		for (i = 0; i <= end_zone; i++) {
 			struct zone *zone = pgdat->node_zones + i;
 			int nr_slab;
@@ -1114,20 +1264,25 @@ scan:
 						zone->pages_high, end_zone, 0, 0))
 					all_zones_ok = 0;
 			}
+			/*初始化先前优先级及当前优先级*/
 			zone->temp_priority = priority;
 			if (zone->prev_priority > priority)
 				zone->prev_priority = priority;
+			/*初始化scan_control*/
 			sc.nr_scanned = 0;
 			sc.nr_reclaimed = 0;
 			sc.priority = priority;
 			sc.swap_cluster_max = nr_pages? nr_pages : SWAP_CLUSTER_MAX;
 			atomic_inc(&zone->reclaim_in_progress);
+			/*为zone回收页框*/
 			shrink_zone(zone, &sc);
 			atomic_dec(&zone->reclaim_in_progress);
 			reclaim_state->reclaimed_slab = 0;
+			/*回收可收缩页高速缓存*/
 			nr_slab = shrink_slab(sc.nr_scanned, GFP_KERNEL,
 						lru_pages);
 			sc.nr_reclaimed += reclaim_state->reclaimed_slab;
+			/*累加total_reclaimed和total_scanned*/
 			total_reclaimed += sc.nr_reclaimed;
 			total_scanned += sc.nr_scanned;
 			if (zone->all_unreclaimable)
@@ -1144,14 +1299,17 @@ scan:
 			    total_scanned > total_reclaimed+total_reclaimed/2)
 				sc.may_writepage = 1;
 		}
+		/*经过回收后仍然无法满足要求，则更新优先级执行下一次回收*/
 		if (nr_pages && to_free > total_reclaimed)
 			continue;	/* swsusp: need to do more work */
+		/*所有zone的水位OK则停止回收*/
 		if (all_zones_ok)
 			break;		/* kswapd: all done */
 		/*
 		 * OK, kswapd is getting into trouble.  Take a nap, then take
 		 * another pass across the zones.
 		 */
+		/*kswapd睡眠一段时间*/
 		if (total_scanned && priority < DEF_PRIORITY - 2)
 			blk_congestion_wait(WRITE, HZ/10);
 
@@ -1161,15 +1319,18 @@ scan:
 		 * matches the direct reclaim path behaviour in terms of impact
 		 * on zone->*_priority.
 		 */
+		/*如果nr_pages为0，已经回收32页则退出*/
 		if ((total_reclaimed >= SWAP_CLUSTER_MAX) && (!nr_pages))
 			break;
 	}
 out:
+	/*更新zone的pre_priority, 它将用于计算swap_tendency，影响active_list转移到inactive_list的数量*/
 	for (i = 0; i < pgdat->nr_zones; i++) {
 		struct zone *zone = pgdat->node_zones + i;
 
 		zone->prev_priority = zone->temp_priority;
 	}
+	/*如果仍有内存紧缺管理区存在, 则调用cond_resched*/
 	if (!all_zones_ok) {
 		cond_resched();
 		goto loop_again;
@@ -1190,6 +1351,10 @@ out:
  *
  * If there are applications that are active memory-allocators
  * (most normal use), this basically shouldn't matter.
+ */
+/*
+ * 周期性回收函数
+ * @p: 内存节点
  */
 static int kswapd(void *p)
 {
@@ -1220,6 +1385,7 @@ static int kswapd(void *p)
 	 * us from recursively trying to free more memory as we're
 	 * trying to free the first piece of memory in the first place).
 	 */
+	/*进程将回收内存；运行时允许使用全部可用空闲内存*/
 	tsk->flags |= PF_MEMALLOC|PF_KSWAPD;
 
 	order = 0;
@@ -1228,6 +1394,7 @@ static int kswapd(void *p)
 
 		try_to_freeze();
 
+		/*把进程设置为TASK_INTERRUPTIBLE状态，让它在pgdat->kswapd_wait等待队列中休眠*/
 		prepare_to_wait(&pgdat->kswapd_wait, &wait, TASK_INTERRUPTIBLE);
 		new_order = pgdat->kswapd_max_order;
 		pgdat->kswapd_max_order = 0;
@@ -1241,8 +1408,10 @@ static int kswapd(void *p)
 			schedule();
 			order = pgdat->kswapd_max_order;
 		}
+		/*从pgdat->kswapd_wait等待队列删除内核线程*/
 		finish_wait(&pgdat->kswapd_wait, &wait);
 
+		/*对kswapd的内存节点进行内存回收*/
 		balance_pgdat(pgdat, 0, order);
 	}
 	return 0;

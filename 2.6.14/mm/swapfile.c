@@ -32,7 +32,9 @@
 #include <linux/swapops.h>
 
 DEFINE_SPINLOCK(swap_lock);
+/*存放swap_info数组中交换区描述符的最后一个索引，实际就是交换区的个数*/
 unsigned int nr_swapfiles;
+/*包含无缺陷页槽的总数*/
 long total_swap_pages;
 static int swap_overflow;
 
@@ -42,7 +44,7 @@ static const char Bad_file[] = "Bad swap file entry ";
 static const char Unused_file[] = "Unused swap file entry ";
 static const char Bad_offset[] = "Bad swap offset entry ";
 static const char Unused_offset[] = "Unused swap offset entry ";
-
+/*交换区链表*/
 struct swap_list_t swap_list = {-1, -1};
 
 struct swap_info_struct swap_info[MAX_SWAPFILES];
@@ -85,6 +87,8 @@ void swap_unplug_io_fn(struct backing_dev_info *unused_bdi, struct page *page)
 #define SWAPFILE_CLUSTER	256
 #define LATENCY_LIMIT		256
 
+
+/*在给定的交换区查找一个空闲的页槽*/
 static inline unsigned long scan_swap_map(struct swap_info_struct *si)
 {
 	unsigned long offset, last_in_cluster;
@@ -172,6 +176,7 @@ no_page:
 	return 0;
 }
 
+/*通过搜索所有活动的交换区来查找一个空闲页槽*/
 swp_entry_t get_swap_page(void)
 {
 	struct swap_info_struct *si;
@@ -274,6 +279,7 @@ static int swap_entry_free(struct swap_info_struct *p, unsigned long offset)
  * Caller has made sure that the swapdevice corresponding to entry
  * is still around or has not been recycled.
  */
+/*当换入页时，对交换区描述符相应的swap_map计数器减一操作*/
 void swap_free(swp_entry_t entry)
 {
 	struct swap_info_struct * p;
@@ -346,6 +352,7 @@ int remove_exclusive_swap_page(struct page *page)
 
 	/* Is the only swap cache user the cache itself? */
 	retval = 0;
+	/*仅有一个进程引用此页槽*/
 	if (p->swap_map[swp_offset(entry)] == 1) {
 		/* Recheck the page count with the swapcache lock held.. */
 		write_lock_irq(&swapper_space.tree_lock);
@@ -370,6 +377,7 @@ int remove_exclusive_swap_page(struct page *page)
  * Free the swap entry like above, but also try to
  * free the page cache entry if it is the last user.
  */
+/*释放一个交换表项，并检查该表项引用的页是否在交换高速缓存*/
 void free_swap_and_cache(swp_entry_t entry)
 {
 	struct swap_info_struct * p;
@@ -577,6 +585,7 @@ static unsigned int find_next_to_unuse(struct swap_info_struct *si,
  * and then search for the process using it.  All the necessary
  * page table adjustments can then be made atomically.
  */
+/*制把这个交换区中剩余的所有页移到RAM中，并相应的修改使用这些页的进程的页表*/
 static int try_to_unuse(unsigned int type)
 {
 	struct swap_info_struct * si = &swap_info[type];
@@ -934,6 +943,7 @@ add_swap_extent(struct swap_info_struct *sis, unsigned long start_page,
  * This is extremely effective.  The average number of iterations in
  * map_swap_page() has been measured at about 0.3 per page.  - akpm.
  */
+/*为交换区创建交换子区链表extent_list*/
 static int setup_swap_extents(struct swap_info_struct *sis, sector_t *span)
 {
 	struct inode *inode;
@@ -948,6 +958,7 @@ static int setup_swap_extents(struct swap_info_struct *sis, sector_t *span)
 	int ret;
 
 	inode = sis->swap_file->f_mapping->host;
+	/*如果交换区建立在磁盘分区上，则只有一个子区*/
 	if (S_ISBLK(inode->i_mode)) {
 		ret = add_swap_extent(sis, 0, sis->max, 0);
 		*span = sis->pages;
@@ -1023,6 +1034,7 @@ reprobe:
 	sis->pages = page_no - 1;
 	sis->highest_bit = page_no - 1;
 done:
+	/*初始化最近使用的子区描述符*/
 	sis->curr_swap_extent = list_entry(sis->extent_list.prev,
 					struct swap_extent, list);
 	goto out;
@@ -1052,7 +1064,10 @@ int page_queue_congested(struct page *page)
 	return bdi_write_congested(bdi);
 }
 #endif
-
+/* 
+ * 使specialfile指定的交换区无效
+ * @specialfile: 指向设备文件（或分区）的路径名，或指向实现交换区的普通文件的路径名
+ */
 asmlinkage long sys_swapoff(const char __user * specialfile)
 {
 	struct swap_info_struct * p = NULL;
@@ -1081,6 +1096,7 @@ asmlinkage long sys_swapoff(const char __user * specialfile)
 	mapping = victim->f_mapping;
 	prev = -1;
 	spin_lock(&swap_lock);
+	/*找到与交换文件对应的交换区描述符，type保存了其位于swap_info数组的下标*/
 	for (type = swap_list.head; type >= 0; type = swap_info[type].next) {
 		p = swap_info + type;
 		if ((p->flags & SWP_ACTIVE) == SWP_ACTIVE) {
@@ -1094,6 +1110,7 @@ asmlinkage long sys_swapoff(const char __user * specialfile)
 		spin_unlock(&swap_lock);
 		goto out_dput;
 	}
+	/*检查是否有足够的空闲页框将交换区上存放的所有页调入*/
 	if (!security_vm_enough_memory(p->pages))
 		vm_unacct_memory(p->pages);
 	else {
@@ -1101,9 +1118,12 @@ asmlinkage long sys_swapoff(const char __user * specialfile)
 		spin_unlock(&swap_lock);
 		goto out_dput;
 	}
+	/*删除查到的交换区描述符*/
 	if (prev < 0) {
+		/*如果swap_list链表的第一个元素就是要查找的交换区描述符,则让链表的head指向下一个元素*/
 		swap_list.head = p->next;
 	} else {
+		/*如果swap_list链表的第一个元素不是是要查找的交换区描述符,则让前一个元素的next指向下一个元素*/
 		swap_info[prev].next = p->next;
 	}
 	if (type == swap_list.next) {
@@ -1116,15 +1136,20 @@ asmlinkage long sys_swapoff(const char __user * specialfile)
 	spin_unlock(&swap_lock);
 
 	current->flags |= PF_SWAPOFF;
+	/*
+	 * 强制把这个交换区中剩余的所有页移到RAM中，并相应的修改使用这些页的进程的页表
+	 */
 	err = try_to_unuse(type);
 	current->flags &= ~PF_SWAPOFF;
 
+	/*如果try_to_unuse分配所有请求页框时失败，则不能禁用这个交换区*/
 	if (err) {
 		/* re-insert swap space back into swap_list */
 		spin_lock(&swap_lock);
 		for (prev = -1, i = swap_list.head; i >= 0; prev = i, i = swap_info[i].next)
 			if (p->prio >= swap_info[i].prio)
 				break;
+		/*将删除的交换区重新放回*/
 		p->next = i;
 		if (prev < 0)
 			swap_list.head = swap_list.next = p - swap_info;
@@ -1138,9 +1163,11 @@ asmlinkage long sys_swapoff(const char __user * specialfile)
 	}
 
 	/* wait for any unplug function to finish */
+	/*为了保证在交换区禁用之前所有交换区页读入page，因此持锁等待*/
 	down_write(&swap_unplug_sem);
 	up_write(&swap_unplug_sem);
 
+	/*从交换子区链表中删除所有子区，并释放交换子区分配内存*/
 	destroy_swap_extents(p);
 	down(&swapon_sem);
 	spin_lock(&swap_lock);
@@ -1162,11 +1189,15 @@ asmlinkage long sys_swapoff(const char __user * specialfile)
 	p->flags = 0;
 	spin_unlock(&swap_lock);
 	up(&swapon_sem);
+	/*释放交换区的引用计数器数组*/
 	vfree(swap_map);
 	inode = mapping->host;
+	/*如果交换区存放在磁盘分区*/
 	if (S_ISBLK(inode->i_mode)) {
 		struct block_device *bdev = I_BDEV(inode);
+		/*恢复块大小原值*/
 		set_blocksize(bdev, p->old_block_size);
+		/*取消交换子系统占有块设备*/
 		bd_release(bdev);
 	} else {
 		down(&inode->i_sem);
@@ -1279,6 +1310,12 @@ __initcall(procswaps_init);
  *
  * The swapon system call
  */
+/*  
+ * 对创建交换区时放入第一个页槽中的swap_header联合体字段进行检查,并初始化交换区描述符，链入swap_list链表
+ *
+ * @specialfile: 指向设备文件（或分区）的路径名，或指向实现交换区的普通文件的路径名
+ * @swap_flags：有一个单独的SWAP_FLAG_PREFER位加上交换区优先级的31位组成
+ */
 asmlinkage long sys_swapon(const char __user * specialfile, int swap_flags)
 {
 	struct swap_info_struct * p;
@@ -1302,10 +1339,13 @@ asmlinkage long sys_swapon(const char __user * specialfile, int swap_flags)
 	struct inode *inode = NULL;
 	int did_down = 0;
 
+	/*不具有CAP_SYS_ADMIN权能则返回*/
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 	spin_lock(&swap_lock);
+	/*获取swap_info数组的第一个交换区描述符*/
 	p = swap_info;
+	/*查找第一个未激活的交换区，交换区描述符数组swap_info索引为type,一般为nr_swapfiles*/
 	for (type = 0 ; type < nr_swapfiles ; type++,p++)
 		if (!(p->flags & SWP_USED))
 			break;
@@ -1322,12 +1362,14 @@ asmlinkage long sys_swapon(const char __user * specialfile, int swap_flags)
 	 * from the initial ~0UL that can't be encoded in either the
 	 * swp_entry_t or the architecture definition of a swap pte.
 	 */
+	/*检查获取的索引值是否超过交换区描述符数组的最大有效索引*/
 	if (type > swp_type(pte_to_swp_entry(swp_entry_to_pte(swp_entry(~0UL,0))))) {
 		spin_unlock(&swap_lock);
 		goto out;
 	}
 	if (type >= nr_swapfiles)
 		nr_swapfiles = type+1;
+	/*初始化找到的交换区描述符*/
 	INIT_LIST_HEAD(&p->extent_list);
 	p->flags = SWP_USED;
 	p->swap_file = NULL;
@@ -1338,10 +1380,12 @@ asmlinkage long sys_swapon(const char __user * specialfile, int swap_flags)
 	p->cluster_nr = 0;
 	p->inuse_pages = 0;
 	p->next = -1;
+	/*表示swap_flags已经指定了交换区描述符的优先级*/
 	if (swap_flags & SWAP_FLAG_PREFER) {
 		p->prio =
 		  (swap_flags & SWAP_FLAG_PRIO_MASK)>>SWAP_FLAG_PRIO_SHIFT;
 	} else {
+		/*将所有活动交换区的最低优先级-1赋值*/
 		p->prio = --least_priority;
 	}
 	spin_unlock(&swap_lock);
@@ -1351,6 +1395,7 @@ asmlinkage long sys_swapon(const char __user * specialfile, int swap_flags)
 		name = NULL;
 		goto bad_swap_2;
 	}
+	/*打开交换区文件,如果没有则创建???*/
 	swap_file = filp_open(name, O_RDWR|O_LARGEFILE, 0);
 	error = PTR_ERR(swap_file);
 	if (IS_ERR(swap_file)) {
@@ -1362,12 +1407,14 @@ asmlinkage long sys_swapon(const char __user * specialfile, int swap_flags)
 	mapping = swap_file->f_mapping;
 	inode = mapping->host;
 
+	/*确认该交换区还未激活*/
 	error = -EBUSY;
 	for (i = 0; i < nr_swapfiles; i++) {
 		struct swap_info_struct *q = &swap_info[i];
 
 		if (i == type || !q->swap_file)
 			continue;
+		/*选取的新交换区已经被激活*/
 		if (mapping == q->swap_file->f_mapping)
 			goto bad_swap;
 	}
@@ -1375,6 +1422,7 @@ asmlinkage long sys_swapon(const char __user * specialfile, int swap_flags)
 	error = -EINVAL;
 	if (S_ISBLK(inode->i_mode)) {
 		bdev = I_BDEV(inode);
+		/*设置块设备的占有者为交换子系统*/
 		error = bd_claim(bdev, sys_swapon);
 		if (error < 0) {
 			bdev = NULL;
@@ -1382,6 +1430,7 @@ asmlinkage long sys_swapon(const char __user * specialfile, int swap_flags)
 			goto bad_swap;
 		}
 		p->old_block_size = block_size(bdev);
+		/*设置块设备大小*/
 		error = set_blocksize(bdev, PAGE_SIZE);
 		if (error < 0)
 			goto bad_swap;
@@ -1390,6 +1439,7 @@ asmlinkage long sys_swapon(const char __user * specialfile, int swap_flags)
 		p->bdev = inode->i_sb->s_bdev;
 		down(&inode->i_sem);
 		did_down = 1;
+		/*文件是否已经被用作交换区*/
 		if (IS_SWAPFILE(inode)) {
 			error = -EBUSY;
 			goto bad_swap;
@@ -1398,6 +1448,7 @@ asmlinkage long sys_swapon(const char __user * specialfile, int swap_flags)
 		goto bad_swap;
 	}
 
+	/*获取交换文件大小，单位：页*/
 	swapfilesize = i_size_read(inode) >> PAGE_SHIFT;
 
 	/*
@@ -1407,18 +1458,23 @@ asmlinkage long sys_swapon(const char __user * specialfile, int swap_flags)
 		error = -EINVAL;
 		goto bad_swap;
 	}
+	/*从交换文件读取第一个页槽，它保存了swap_header描述符*/
 	page = read_cache_page(mapping, 0,
 			(filler_t *)mapping->a_ops->readpage, swap_file);
 	if (IS_ERR(page)) {
 		error = PTR_ERR(page);
 		goto bad_swap;
 	}
+	/*等待页被读取内存*/
 	wait_on_page_locked(page);
 	if (!PageUptodate(page))
 		goto bad_swap;
+	/*为page创建永久性映射*/
 	kmap(page);
+	/*获取page的虚拟地址，他就是交换区第一个页即swap_header所在的地址*/
 	swap_header = page_address(page);
 
+	/*检查swap_header所在页的最后10个字节,得到swap_header的版本*/
 	if (!memcmp("SWAP-SPACE",swap_header->magic.magic,10))
 		swap_header_version = 1;
 	else if (!memcmp("SWAPSPACE2",swap_header->magic.magic,10))
@@ -1428,7 +1484,7 @@ asmlinkage long sys_swapon(const char __user * specialfile, int swap_flags)
 		error = -EINVAL;
 		goto bad_swap;
 	}
-	
+
 	switch (swap_header_version) {
 	case 1:
 		printk(KERN_ERR "version 0 swap is no longer supported. "
@@ -1446,7 +1502,9 @@ asmlinkage long sys_swapon(const char __user * specialfile, int swap_flags)
 			goto bad_swap;
 		}
 
+		/*初始化交换区搜索空闲页槽的起始页槽*/
 		p->lowest_bit  = 1;
+		/*初始化交换区搜索空闲页槽的下一个页槽*/
 		p->cluster_next = 1;
 
 		/*
@@ -1466,6 +1524,7 @@ asmlinkage long sys_swapon(const char __user * specialfile, int swap_flags)
 		maxpages = swp_offset(pte_to_swp_entry(swp_entry_to_pte(swp_entry(0,~0UL)))) - 1;
 		if (maxpages > swap_header->info.last_page)
 			maxpages = swap_header->info.last_page;
+		/*初始化交换区搜索空闲页槽时的最后一个页槽*/
 		p->highest_bit = maxpages - 1;
 
 		error = -EINVAL;
@@ -1477,6 +1536,7 @@ asmlinkage long sys_swapon(const char __user * specialfile, int swap_flags)
 			goto bad_swap;
 		
 		/* OK, set up the swap map and apply the bad block list */
+		/*为页槽计数器数组分配空间*/
 		if (!(p->swap_map = vmalloc(maxpages * sizeof(short)))) {
 			error = -ENOMEM;
 			goto bad_swap;
@@ -1484,6 +1544,7 @@ asmlinkage long sys_swapon(const char __user * specialfile, int swap_flags)
 
 		error = 0;
 		memset(p->swap_map, 0, maxpages * sizeof(short));
+		/*对坏的页槽，将页框计数器数组对应的元素设置为SWAP_MAP_BAD，表示此页槽坏*/
 		for (i=0; i<swap_header->info.nr_badpages; i++) {
 			int page = swap_header->info.badpages[i];
 			if (page <= 0 || page >= swap_header->info.last_page)
@@ -1508,6 +1569,7 @@ asmlinkage long sys_swapon(const char __user * specialfile, int swap_flags)
 		p->swap_map[0] = SWAP_MAP_BAD;
 		p->max = maxpages;
 		p->pages = nr_good_pages;
+		/*创建交换子区*/
 		nr_extents = setup_swap_extents(p, &span);
 		if (nr_extents < 0) {
 			error = nr_extents;
@@ -1533,6 +1595,7 @@ asmlinkage long sys_swapon(const char __user * specialfile, int swap_flags)
 		nr_extents, (unsigned long long)span<<(PAGE_SHIFT-10));
 
 	/* insert swap space into swap_list: */
+	/*按照优先级，将新交换区插入到swap_list链表*/
 	prev = -1;
 	for (i = swap_list.head; i >= 0; i = swap_info[i].next) {
 		if (p->prio >= swap_info[i].prio) {
@@ -1606,6 +1669,10 @@ void si_swapinfo(struct sysinfo *val)
  * Note: if swap_map[] reaches SWAP_MAP_MAX the entries are treated as
  * "permanent", but will be reclaimed by the next swapoff.
  */
+/*
+ * 试图换出一个已经换出的页，增加交换区的引用计数
+ * @entry: 换出页标识符，包含交换区描述符位于swap_info数组中的索引以及交换区的页槽索引
+ */
 int swap_duplicate(swp_entry_t entry)
 {
 	struct swap_info_struct * p;
@@ -1615,12 +1682,17 @@ int swap_duplicate(swp_entry_t entry)
 	type = swp_type(entry);
 	if (type >= nr_swapfiles)
 		goto bad_file;
+	/*获取交换区描述符在swap_info数组的地址*/
 	p = type + swap_info;
+	/*获取交换区的页槽索引*/
 	offset = swp_offset(entry);
 
 	spin_lock(&swap_lock);
+	/*交换区被激活*/
 	if (offset < p->max && p->swap_map[offset]) {
+		/*交换区有效且不为空闲*/
 		if (p->swap_map[offset] < SWAP_MAP_MAX - 1) {
+			/*增加交换区页槽的引用计数*/
 			p->swap_map[offset]++;
 			result = 1;
 		} else if (p->swap_map[offset] <= SWAP_MAP_MAX) {

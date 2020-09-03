@@ -58,12 +58,68 @@ extern int sysctl_legacy_va_layout;
  *    +---------------+--------+-------------+--------+
  *    |               |        |             |        |    
  *    +-----------------------------------------------+
- *    |<--vm_offset-->|
+ *    |<--vm_pgoff-->|
  */
 /*
  * 线性区描述符,线性区不同重叠，通过两种方法存储：
  * 1.通过链表，进程所有线性区以内存地址升序链接在一起,链表头位于mm_struct->mmap
  * 2.通过红黑树存放
+ */
+/*
+ * 经典进程地址空间布局：
+ *
+ *          +--------------------+
+ *          |     内核空间       |---------------------->用户代码不可见区域
+ *          +--------------------+----->0xc000 0000
+ *          |     栈随机偏移     |
+ *          +--------------------+
+ *          |   Stack(用户栈)    |
+ *          |        |           |---------------------->ESP指向栈顶
+ *          |        V           |
+ *          +                    +---------------------->空闲区域
+ *          |        ^           |
+ *          |        |           |
+ *          |    mmap映射区      |
+ *          +--------------------+----->0x4000 0000
+ *          |        ^           |
+ *          |        |           |---------------------->通过brk/sbrk系统调用扩大堆，向上增长。
+ *          |       Heap         |
+ *          +--------------------+
+ *          | .data、.bss(读写段)|---------------------->从可执行文件中加载
+ *          +--------------------+
+ *          |.init .text .rodata |---------------------->从可执行文件中加载
+ *          |      (只读段)      |
+ *          +--------------------+----->0x0804 8000
+ *          |      保留区域      |
+ *          +--------------------+
+ *
+ *  灵活进程空间新布局：
+ *
+ *          +--------------------+
+ *          |     内核空间       |---------------------->用户代码不可见区域
+ *          +--------------------+----->0xc000 0000
+ *          |     栈随机偏移     |
+ *          +--------------------+
+ *          |   Stack(用户栈)    |
+ *          |        |           |---------------------->ESP指向栈顶
+ *          |        V           |
+ *          +--------------------+
+ *          |     mmap映射区     |
+ *          |        |           |
+ *          |        V           |
+ *          |                    |
+ *          +                    +
+ *          |        ^           |
+ *          |        |           |---------------------->通过brk/sbrk系统调用扩大堆，向上增长。
+ *          |       Heap         |
+ *          +--------------------+
+ *          | .data、.bss(读写段)|---------------------->从可执行文件中加载
+ *          +--------------------+
+ *          |.init .text .rodata |---------------------->从可执行文件中加载
+ *          |      (只读段)      |
+ *          +--------------------+----->0x0804 8000
+ *          |      保留区域      |
+ *          +--------------------+ 
  */
 struct vm_area_struct {
 	/*指向线性区所在的内存描述符*/
@@ -130,7 +186,7 @@ struct vm_area_struct {
 					   units, *not* PAGE_CACHE_SIZE */
 	/*指向所映射文件的文件对象*/
 	struct file * vm_file;		/* File we map to (can be NULL). */
-	/*指向内存区私有数据*/
+	/*指向内存区私有数据,如：在非线性映射时存放当前扫描的当前指针*/
 	void * vm_private_data;		/* was vm_pte (shared mem) */
 	/*释放非线性文件内存映射中的一个线性地址区间时使用*/
 	unsigned long vm_truncate_count;/* truncate_count or restart_addr */
@@ -278,6 +334,39 @@ typedef unsigned long page_flags_t;
  * moment. Note that we have no way to track which tasks are using
  * a page.
  */
+/*
+ * ==页框回收处理的页框类型==
+ *
+ * 1.不可回收页: 不允许也无需回收
+ *   |--空闲页（包含在伙伴系统中）
+ *   |--保留页
+ *   |--内核动态分配页
+ *   |--进程内核态堆栈页
+ *   |--临时锁定页（PG_locked标志置位）
+ *   |--内存锁定页（在线性区中且VM_LOCKED标志置位）
+ * 2.可交换页：将页的内容保存在交换区
+ *   |--用户态地址空间的匿名页
+ *   |--tmpfs文件系统的映射页（如IPC共享内存的页）
+ * 3.可同步页：必要时，与磁盘映像同步这些页
+ *   |--用户态地址空间的映射页
+ *   |--存有磁盘文件数据且在页高速缓存中的页
+ *   |--块设备缓冲区页
+ *   |--某些磁盘高速缓存的页（如索引节点高速缓存）
+ * 4.可丢弃页：无需操作
+ *   |--内存高速缓存未使用的页（如slab分配器高速缓存）
+ *   |--目录项高速缓存的未使用页
+ *
+ * ==页框回收算法的基本原则==
+ * 1.首先释放无害页：没有任何进程使用的磁盘高速缓存的页
+ * 2.将用户态进程的所有页定为可回收页：除了锁定页
+ * 3.同时取消引用一个共享页的所有页表项的映射即可回收该共享页框
+ * 4.只回收未用页：长时间没有被访问的页
+ *
+ * ==页框回收算法执行的基本情形==
+ * 1.内存紧缺回收：内存发现内存紧缺,grow_buffers()/alloc_page_buffers()/__alloc_pages()时激活
+ * 2.睡眠回收：suspend-to-disk时
+ * 3.周期回收：周期性激活内核线程执行内存回收算法，kswapd/events内核线程激活
+ */
 /*页框描述符，所有页描述符保存在mem_map中*/
 struct page {
 	/*
@@ -289,10 +378,13 @@ struct page {
 	 */
 	page_flags_t flags;		/* Atomic flags, some possibly
 					 * updated asynchronously */
-	/* 页的引用计数，-1表示页框空闲，大于等于0说明分配给一个或多个进程或存放内核数据结构，
+	/* 页的引用计数，-1:表示页框空闲; >=0: 说明分配给一个或多个进程或存放内核数据结构，
 	 * page_count返回_count加1，表示页使用者数目*/
 	atomic_t _count;		/* Usage count, see below. */
-	/*页框中的页表项数目（如果没有则-1）*/
+	/*
+	 * 引用页框中的页表项数目，-1：没有页表项引用此页框；0:非共享；>0: 共享的
+	 * page_mapcount()返回_mapcount+1
+	 */
 	atomic_t _mapcount;		/* Count of ptes mapped in mms,
 					 * to show when page is mapped
 					 * & limit reverse map searches.
@@ -300,9 +392,13 @@ struct page {
 	union {
 		/*
 		 * 可用于正在使用页的内核成分
-		 * 对于page cache,private指向第一个buffer_headi
-		 * 如果页是空闲页框块的第一个page，则由buddy使用保存page所属页框块的order
-		 * 它可以用于相邻页框块是否可以合并为2^(order+1)大小的页框快
+		 * 1.对于page cache(PG_private置位)
+		 *   private指向第一个buffer_head
+		 * 2.如果页是空闲页框块
+		 *   页框块的第一个page，则由buddy使用保存page所属页框块的order
+		 *   它可以用于相邻页框块是否可以合并为2^(order+1)大小的页框快
+		 * 3.对于交换高速缓存（PG_swapcache置位）
+		 *   存放与页有关的换出页标识符（交换区索引和页槽索引，type | offset）
 		 */
 		unsigned long private;	/* Mapping-private opaque data:
 					 * usually used for buffer_heads
@@ -316,9 +412,13 @@ struct page {
 #endif
 	} u;
 	/*
-	 * 当页被插入高速缓存或页属于匿名区时使用
-	 * 当页为匿名页，则mapping保存anon_vma的地址
-	 * 注：anon_vma为匿名页所在线性区VMA的链表头
+	 * 用于判断页是映射页还是匿名页
+	 * (1)mapping为空：页属于交换高速缓存
+	 * (2)mapping非空，且最低位是1，表示该页为匿名页，mapping保存vma->anon_vma的地址
+	 * (3)mapping非空，且最低位为0，表示该页为映射页，mapping指向对应文件的address_space对象
+	 * 注：.address_space对象地址在RAM中按4字节对齐，所以最低位可以使用
+	 *     .PageAnon以页描述符为参数，返回mapping的最低位是否置1
+	 *     .anon_vma为匿名页所在线性区VMA的链表头
 	 */
 	struct address_space *mapping;	/* If low bit clear, points to
 					 * inode address_space, or NULL.
@@ -327,7 +427,11 @@ struct page {
 					 * it points to anon_vma object:
 					 * see PAGE_MAPPING_ANON below.
 					 */
-	/*存放文件的页索引或存放一个换出页标识符*/
+	/*
+	 * 存放文件的页索引或存放一个换出页标识符
+	 * 对于匿名页，存放线性区内的页索引或页的线性地址/PAGE_SIZE
+	 * 对于文件页，存放被映射文件内的页偏移量
+	 */
 	pgoff_t index;			/* Our offset within mapping. */
 	/*
 	 * 当页空闲时lru链入到free_area->free_list链表，不空闲时链接到lru链表的链接件
@@ -433,7 +537,7 @@ static inline void get_page(struct page *page)
 
 static inline void put_page(struct page *page)
 {
-	/*如果page引用计数为0则返回true*/
+	/*如果page引用计数为0*/
 	if (put_page_testzero(page))
 		/*释放page*/
 		__page_cache_release(page);
@@ -676,7 +780,7 @@ static inline struct address_space *page_mapping(struct page *page)
 		mapping = NULL;
 	return mapping;
 }
-
+/*page->mapping的最低位保存是否存储了address_space还是vma->anon_vma*/
 static inline int PageAnon(struct page *page)
 {
 	return ((unsigned long)page->mapping & PAGE_MAPPING_ANON) != 0;

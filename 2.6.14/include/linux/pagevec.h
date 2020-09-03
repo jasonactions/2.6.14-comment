@@ -72,6 +72,7 @@ static inline void pagevec_release_nonlru(struct pagevec *pvec)
 		__pagevec_release_nonlru(pvec);
 }
 
+/*通过free_hot_cold_page()释放单页框到per-cpu高速缓存*/
 static inline void pagevec_free(struct pagevec *pvec)
 {
 	if (pagevec_count(pvec))

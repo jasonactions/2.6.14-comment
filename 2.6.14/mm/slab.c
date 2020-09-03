@@ -349,9 +349,9 @@ struct kmem_list3 {
 	struct list_head	slabs_free;
 	/*高速缓存中空闲对象的个数*/
 	unsigned long	free_objects;
-	/*slab回收器的页回收算法使用??*/
+	/*slab回收器的页回收算法使用,用于存放下一次的收割时间*/
 	unsigned long	next_reap;
-	/*slab回收器的页回收算法使用??*/
+	/*slab回收器的页回收算法使用,表示有新的slab最近被加入高速缓存*/
 	int		free_touched;
 	/*高速缓存空闲对象的限制数目,通常为cachep->num+(1+N)xcachep->batchcount,其中N代表系统中CPU个数*/
 	unsigned int 	free_limit;
@@ -704,6 +704,7 @@ static kmem_cache_t cache_cache = {
 };
 
 /* Guard access to the cache-chain. */
+/*用于保护高速缓存描述符链表*/
 static struct semaphore	cache_chain_sem;
 static struct list_head cache_chain;
 
@@ -898,6 +899,7 @@ static inline void __drain_alien_cache(kmem_cache_t *cachep, struct array_cache 
 	}
 }
 
+/*释放外部节点的本地高速缓存*/
 static void drain_alien_cache(kmem_cache_t *cachep, struct kmem_list3 *l3)
 {
 	int i=0;
@@ -2783,7 +2785,7 @@ static void free_block(kmem_cache_t *cachep, void **objpp, int nr_objects, int n
 		slabp->free = objnr;
 		STATS_DEC_ACTIVE(cachep);
 		slabp->inuse--;
-		/*增加空间对象个数*/
+		/*增加空闲对象个数*/
 		l3->free_objects++;
 		check_slabp(cachep, slabp);
 
@@ -2878,7 +2880,7 @@ free_done:
  *
  * Called with disabled ints.
  */
-/*释放一个对象,释放顺序为本地高速缓存，共享高速缓存，高速缓存slabs_partial/slabs_free*/
+/*释放一个对象,释放顺序为本地高速缓存，共享高速缓存，高速缓存slabs_partial/slabs_free,buddy*/
 static inline void __cache_free(kmem_cache_t *cachep, void *objp)
 {
 	struct array_cache *ac = ac_data(cachep);
@@ -3394,6 +3396,7 @@ static void enable_cpucache(kmem_cache_t *cachep)
 					cachep->name, -err);
 }
 
+/*释放本地高速缓存或所有cpu共享的高速缓存*/
 static void drain_array_locked(kmem_cache_t *cachep,
 				struct array_cache *ac, int force, int node)
 {
@@ -3425,6 +3428,12 @@ static void drain_array_locked(kmem_cache_t *cachep,
  * If we cannot acquire the cache chain semaphore then just give up - we'll
  * try again on the next iteration.
  */
+/*
+ * 回收slab高速缓存
+ * cache_reap与kmem_cache_free的区别：
+ * kmem_cache_free回收free_list链表的slab门槛高于cache_reap, 通过cache_reap回收，
+ *    可以减轻kmem_cache_free的压力，但是由于销毁了slab，当大量使用时，又要重新分配
+ */
 static void cache_reap(void *unused)
 {
 	struct list_head *walk;
@@ -3444,6 +3453,7 @@ static void cache_reap(void *unused)
 
 		searchp = list_entry(walk, kmem_cache_t, next);
 
+		/*页框回收被禁止*/
 		if (searchp->flags & SLAB_NO_REAP)
 			goto next;
 
@@ -3451,27 +3461,39 @@ static void cache_reap(void *unused)
 
 		l3 = searchp->nodelists[numa_node_id()];
 		if (l3->alien)
+			/*释放外部节点的slab本地高速缓存*/ 
 			drain_alien_cache(searchp, l3);
 		spin_lock_irq(&l3->list_lock);
 
+		/*释放本地高速缓存或所有cpu共享的高速缓存*/ 
 		drain_array_locked(searchp, ac_data(searchp), 0,
 				numa_node_id());
 
+		/*如果jiffies小于收割时间l3->next_reap,则继续处理下一个高速缓存 */
 		if (time_after(l3->next_reap, jiffies))
 			goto next_unlock;
 
+		/*修改下一次收割时间为：从现在开始4s*/
 		l3->next_reap = jiffies + REAPTIMEOUT_LIST3;
 
+		/*释放所有cpu共享的slab高速缓存*/
 		if (l3->shared)
 			drain_array_locked(searchp, l3->shared, 0,
 				numa_node_id());
 
+		/*如果有新的slab加入高速缓存，清标志后，跳过这个高速缓存*/
 		if (l3->free_touched) {
 			l3->free_touched = 0;
 			goto next_unlock;
 		}
 
+		/*
+		 * 根据经验公式计算要释放的slab数量. 此门槛要低于kmem_cache_free时的门槛，
+		 * 可以减轻kmem_cache_free的压力，但是由于销毁了slab，当大量使用时，又要重新分配
+		 * 高速缓存空闲对象数的上限 / (5 x  单个slab的对象数)
+		 */
 		tofree = (l3->free_limit+5*searchp->num-1)/(5*searchp->num);
+		/*遍历slabs_free链表,释放tofree个slab，如果链表为空则退出*/
 		do {
 			p = l3->slabs_free.next;
 			if (p == &(l3->slabs_free))
@@ -3489,6 +3511,7 @@ static void cache_reap(void *unused)
 			 */
 			l3->free_objects -= searchp->num;
 			spin_unlock_irq(&l3->list_lock);
+			/*销毁slab,释放slab使用的所有连续页框返回给伙伴系统*/
 			slab_destroy(searchp, slabp);
 			spin_lock_irq(&l3->list_lock);
 		} while(--tofree > 0);

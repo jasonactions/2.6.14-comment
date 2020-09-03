@@ -607,6 +607,8 @@ vmalloc_fault:
 		 * 由于vmalloc时创建的页表项是基于init_mm.pgd,并未修改current->mm.pgd，
 		 * 因此只要将pgd_k赋值给pgd即可，但是如果PAE激活则PGD与PUD不为空
 		 * 如果PAE没有激活则设置PMD隐含设置了PUD，PGD,也就指向了同一个PTE???
+		 * 问题：为何vmalloc时不直接为进程分配页表项，而是在init_mm中分配
+		 *       主要是为了通过init_mm同步地址空间信息给其它进程
 		 */
 		set_pmd(pmd, *pmd_k);
 

@@ -43,6 +43,7 @@
  *    of least surprise ... (be careful when you change it)
  */
 
+/*计算进程的OOM分数*/
 unsigned long badness(struct task_struct *p, unsigned long uptime)
 {
 	unsigned long points, cpu_time, run_time, s;
@@ -136,6 +137,15 @@ unsigned long badness(struct task_struct *p, unsigned long uptime)
  *
  * (not docbooked, we don't want this one cluttering up the manual)
  */
+/*
+ * 选择一个合适的进程执行OOM，选择的进程符合如下条件：
+ * 1.拥有大量页框；
+ * 2.删除它只损失少量成果
+ * 3.较低的静态优先级
+ * 4.不具有root特权
+ * 5.不具有访问硬件能力
+ * 6.非swapper,init进程和其它任何内核线程
+ */
 static struct task_struct * select_bad_process(void)
 {
 	unsigned long maxpoints = 0;
@@ -154,6 +164,7 @@ static struct task_struct * select_bad_process(void)
 		if (p->oomkilladj == OOM_DISABLE)
 			continue;
 		/* If p's nodes don't overlap ours, it won't help to kill p. */
+		/*判断当前进程和进程p是否可以使用相同的内存node节点*/
 		if (!cpuset_excl_nodes_overlap(p))
 			continue;
 
@@ -168,6 +179,7 @@ static struct task_struct * select_bad_process(void)
 		if (p->flags & PF_SWAPOFF)
 			return p;
 
+		/*计算进程p的oom分数*/
 		points = badness(p, uptime.tv_sec);
 		if (points > maxpoints || !chosen) {
 			chosen = p;

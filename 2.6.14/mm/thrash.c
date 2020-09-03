@@ -1,0 +1,128 @@
+/*
+ * mm/thrash.c
+ *
+ * Copyright (C) 2004, Red Hat, Inc.
+ * Copyright (C) 2004, Rik van Riel <riel@redhat.com>
+ * Released under the GPL, see the file COPYING for details.
+ *
+ * Simple token based thrashing protection, using the algorithm
+ * described in:  http://www.cs.wm.edu/~sjiang/token.pdf
+ */
+#include <linux/jiffies.h>
+#include <linux/mm.h>
+#include <linux/sched.h>
+#include <linux/swap.h>
+
+static DEFINE_SPINLOCK(swap_token_lock);
+static unsigned long swap_token_timeout;
+/*用于记录上次持有swap token的时间*/
+static unsigned long swap_token_check;
+/*
+ * 拥有交换标记进程可以免除页框回收
+ * 通过将swap_token_mm设为进程的mm，则当前进程就持有了swap token
+ * 交换标记在如下情况下不予考虑：
+ * 1.回收算法代表一个拥有交换标记的进程运行
+ * 2.回收算法到达页框回收的最难优先级（0级）
+ */
+struct mm_struct * swap_token_mm = &init_mm;
+
+#define SWAP_TOKEN_CHECK_INTERVAL (HZ * 2)
+#define SWAP_TOKEN_TIMEOUT	(300 * HZ)
+/*
+ * Currently disabled; Needs further code to work at HZ * 300.
+ */
+unsigned long swap_token_default_timeout = SWAP_TOKEN_TIMEOUT;
+
+/*
+ * Take the token away if the process had no page faults
+ * in the last interval, or if it has held the token for
+ * too long.
+ */
+/*RSS足够*/
+#define SWAP_TOKEN_ENOUGH_RSS 1
+/*持有时间超时*/
+#define SWAP_TOKEN_TIMED_OUT 2
+/*
+ * 判断是否应该交出swap token以及交出的原因
+ */
+static int should_release_swap_token(struct mm_struct *mm)
+{
+	int ret = 0;
+	/*如果最近没有发生主缺页*/
+	if (!mm->recent_pagein)
+		ret = SWAP_TOKEN_ENOUGH_RSS;
+	/*如果持有swap token时间超时*/
+	else if (time_after(jiffies, swap_token_timeout))
+		ret = SWAP_TOKEN_TIMED_OUT;
+	mm->recent_pagein = 0;
+	return ret;
+}
+
+/*
+ * Try to grab the swapout protection token.  We only try to
+ * grab it once every TOKEN_CHECK_INTERVAL, both to prevent
+ * SMP lock contention and to check that the process that held
+ * the token before is no longer thrashing.
+ */
+/*
+ * 获取swap token,即将进程的mm赋值给swap_token_mm
+ * 通过/proc/sys/vm/swap_token_default_timeout可以修改超时时间
+ */
+void grab_swap_token(void)
+{
+	struct mm_struct *mm;
+	int reason;
+
+	/* We have the token. Let others know we still need it. */
+	if (has_swap_token(current->mm)) {
+		current->mm->recent_pagein = 1;
+		return;
+	}
+
+	/*如果自从上次持有swap token, 已经过了2s*/
+	if (time_after(jiffies, swap_token_check)) {
+
+		/* Can't get swapout protection if we exceed our RSS limit. */
+		// if (current->mm->rss > current->mm->rlimit_rss)
+		//	return;
+
+		/* ... or if we recently held the token. */
+		if (time_before(jiffies, current->mm->swap_token_time))
+			return;
+
+		if (!spin_trylock(&swap_token_lock))
+			return;
+
+		/*设定下次检查的时间点*/
+		swap_token_check = jiffies + SWAP_TOKEN_CHECK_INTERVAL;
+
+		mm = swap_token_mm;
+		/*如果reason > 0则mm应该交出swap token*/
+		if ((reason = should_release_swap_token(mm))) {
+			unsigned long eligible = jiffies;
+			/*由于超时需要交出swap token*/
+			if (reason == SWAP_TOKEN_TIMED_OUT) {
+				eligible += swap_token_default_timeout;
+			}
+			/*设置进程mm在该时间点可以获取交换标记*/
+			mm->swap_token_time = eligible;
+			/*设置current->mm持有swap token超时的时间点*/
+			swap_token_timeout = jiffies + swap_token_default_timeout;
+			/*将当前进程的mm设为持有swap token标记*/
+			swap_token_mm = current->mm;
+		}
+		spin_unlock(&swap_token_lock);
+	}
+	return;
+}
+
+/* Called on process exit. */
+void __put_swap_token(struct mm_struct *mm)
+{
+	spin_lock(&swap_token_lock);
+	if (likely(mm == swap_token_mm)) {
+		swap_token_mm = &init_mm;
+		swap_token_check = jiffies;
+	}
+	spin_unlock(&swap_token_lock);
+}

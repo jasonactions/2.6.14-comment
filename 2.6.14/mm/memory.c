@@ -1274,7 +1274,7 @@ static inline pte_t maybe_mkwrite(pte_t pte, struct vm_area_struct *vma)
 /*
  * 写时复制，copy_mm时会将父进程和子进程的页表项都设置为只读
  * 无论是父进程或子进程执行写入都会触发page fault，通过此函数执行写时复制
- * 分配新的page，并修改相应的页表项为对写
+ * 分配新的page，并修改相应的页表项为读写
  *
  * @vma: 父进程和子进程具有相同的vma，vma中保存了线性区原有的读写权限 
  */
@@ -1691,6 +1691,18 @@ void swapin_readahead(swp_entry_t entry, unsigned long addr,struct vm_area_struc
  * but allow concurrent faults), and pte mapped but not yet locked.
  * We return with mmap_sem still held, but pte unmapped and unlocked.
  */
+/*
+ * 从交换区读取一个页到交换高速缓存
+ *
+ * @mm: 引起缺页异常的进程的内存描述符地址
+ * @vma: address所在的线性区的线性区描述符地址
+ * @pmd: 映射address的页中间目录的地址
+ * @page_table: 映射address的页表项地址
+ * @write_access: 表示试图执行的操作时读操作还是写操作
+ * @orig_pte：映射address的页表项的内容,在换入之前一般为换出页标识符（交换区索引|页槽索引）
+ *
+ * @return: 1:minor fault，页已经在交换高速缓存；2：major fault，页已经从交换区读取；-1：发生错误
+ */
 static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
 		unsigned long address, pte_t *page_table, pmd_t *pmd,
 		int write_access, pte_t orig_pte)
@@ -1701,19 +1713,44 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
 	pte_t pte;
 	int ret = VM_FAULT_MINOR;
 
+	/*
+	 * 释放任何页表的临时内核映射???，该页表由handle_mm_fault建立
+	 * 由于orig_pte是根据address计算得出，如果它与page_table存储的pte不一致，则说明页已经从交换区读取到page
+	 */
 	if (!pte_unmap_same(mm, pmd, page_table, orig_pte))
 		goto out;
 
+	/*获得换出页标识符，它包含交换区索引和页槽索引*/
 	entry = pte_to_swp_entry(orig_pte);
+	/*根据换出页标识符，在页交换高速缓存中查找页*/
 	page = lookup_swap_cache(entry);
 	if (!page) {
+		/*
+		 * 从交换区读取至多有2n个页的一组页，其中包括所请求的页，值n存放在page_cluster中，通常等于3
+		 * 注：可以通过/proc/sys/vm/page-cluster改写
+		 */
  		swapin_readahead(entry, address, vma);
+		/*
+		 * 换入由引起缺页异常的进程所访问的那一页
+		 * 注：此步骤不是多余，如果swapin_readahead的page-cluster设为0则会读取失败
+		 *     或读取一组含有空闲或有缺陷页槽的页。
+		 *     如果swapin_readahead成功，则此函数很快结束,因为它在交换缓存中找到了页
+		 */
  		page = read_swap_cache_async(entry, vma, address);
+		/*
+		 * 如果请求的页仍然没有加入交换高速缓存，
+		 */
 		if (!page) {
 			/*
 			 * Back out if somebody else faulted in this pte
 			 * while we released the pte lock.
 			 */
+			/*
+			 * 检查是否有其它内核路径换入了当前进程所请求的页???
+			 * 通过获取page_table_lock自旋锁，并把page_table所指向的表项与orig_pte进行比较来实现
+			 * 如果两者有差异，则说明这一页已经被某个其它内核路径换入
+			 */
+			/*创建临时映射，以读取页表*/
 			page_table = pte_offset_map_lock(mm, pmd, address, &ptl);
 			if (likely(pte_same(*page_table, orig_pte)))
 				ret = VM_FAULT_OOM;
@@ -1721,8 +1758,10 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
 		}
 
 		/* Had to read the page from swap area: Major fault */
+		/*页已经从交换区换入*/
 		ret = VM_FAULT_MAJOR;
 		inc_page_state(pgmajfault);
+		/*获取swap token,即将进程的mm赋值给swap_token_mm，可以避免页面在超时时间内换出*/
 		grab_swap_token();
 	}
 
@@ -1732,6 +1771,7 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
 	/*
 	 * Back out if somebody else already faulted in this pte.
 	 */
+	/*检查是否其它内核路径换入了当前进程所请求的页???*/
 	page_table = pte_offset_map_lock(mm, pmd, address, &ptl);
 	if (unlikely(!pte_same(*page_table, orig_pte)))
 		goto out_nomap;
@@ -1742,23 +1782,28 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
 	}
 
 	/* The page isn't present yet, go ahead with the fault. */
-
+	/*增加进程的内存描述符的rss字段*/
 	inc_mm_counter(mm, anon_rss);
+
+	/* 更新页表项,以便进程能找到这一页 */
 	pte = mk_pte(page, vma->vm_page_prot);
 	if (write_access && can_share_swap_page(page)) {
 		pte = maybe_mkwrite(pte_mkdirty(pte), vma);
 		write_access = 0;
 	}
-
 	flush_icache_page(vma, page);
 	set_pte_at(mm, address, page_table, pte);
 	page_add_anon_rmap(page, vma, address);
 
+	/*减少entry页槽的引用计数*/
 	swap_free(entry);
+	/*可用页槽占比不足50%？*/
 	if (vm_swap_full())
+		/*如果页只被引起异常的进程拥有，则从交换高速缓存删除这一页*/
 		remove_exclusive_swap_page(page);
 	unlock_page(page);
 
+	/*如果是写访问触发写时复制*/
 	if (write_access) {
 		if (do_wp_page(mm, vma, address,
 				page_table, pmd, ptl, pte) == VM_FAULT_OOM)
@@ -1774,6 +1819,7 @@ unlock:
 out:
 	return ret;
 out_nomap:
+	/*???*/
 	pte_unmap_unlock(page_table, ptl);
 	unlock_page(page);
 	page_cache_release(page);
@@ -1891,7 +1937,7 @@ static int do_no_page(struct mm_struct *mm, struct vm_area_struct *vma,
 		smp_rmb(); /* serializes i_size against truncate_count */
 	}
 retry:
-	/*调用nopage方法(filemap_nopage)，返回包含所请求页的页框的地址*/
+	/*调用nopage方法(一般为filemap_nopage)，返回包含所请求页的页框的地址*/
 	new_page = vma->vm_ops->nopage(vma, address & PAGE_MASK, &ret);
 	/*
 	 * No smp_rmb is needed here as long as there's a full
@@ -2066,7 +2112,11 @@ static inline int handle_pte_fault(struct mm_struct *mm,
 		if (pte_file(entry))
 			return do_file_page(mm, vma, address,
 					pte, pmd, write_access, entry);
-		/*情形3：页表项p位为0，D位为0，页表项不为0，进程已经访问过这个页，但是其内容被临时保存在磁盘*/
+		/*
+		 * 情形3：页表项p位为0(页不在内存)，D位为0，页表项不为0，
+		 *      表示进程已经访问过这个页，但是其内容被临时保存在磁盘
+		 *      页表项中保存交换区索引|页槽索引
+		 */
 		return do_swap_page(mm, vma, address,
 					pte, pmd, write_access, entry);
 	}

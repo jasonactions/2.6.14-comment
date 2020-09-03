@@ -415,6 +415,7 @@ static int can_unuse(struct inode *inode)
  * If the inode has metadata buffers attached to mapping->private_list then
  * try to remove them.
  */
+/*扫描nr个inode对象，进行释放*/
 static void prune_icache(int nr_to_scan)
 {
 	LIST_HEAD(freeable);
@@ -457,6 +458,7 @@ static void prune_icache(int nr_to_scan)
 	inodes_stat.nr_unused -= nr_pruned;
 	spin_unlock(&inode_lock);
 
+	/*释放freeable链表的inode到slab分配器*/
 	dispose_list(&freeable);
 	up(&iprune_sem);
 
@@ -475,6 +477,7 @@ static void prune_icache(int nr_to_scan)
  * This function is passed the number of inodes to scan, and it returns the
  * total number of remaining possibly-reclaimable inodes.
  */
+/*从inode高速缓存删除未用索引节点对象*/
 static int shrink_icache_memory(int nr, gfp_t gfp_mask)
 {
 	if (nr) {
@@ -485,6 +488,7 @@ static int shrink_icache_memory(int nr, gfp_t gfp_mask)
 	 	 */
 		if (!(gfp_mask & __GFP_FS))
 			return -1;
+		/*扫描nr个inode对象，进行释放*/
 		prune_icache(nr);
 	}
 	return (inodes_stat.nr_unused / 100) * sysctl_vfs_cache_pressure;

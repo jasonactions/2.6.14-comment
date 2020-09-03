@@ -51,6 +51,7 @@ EXPORT_SYMBOL(node_possible_map);
 struct pglist_data *pgdat_list __read_mostly;
 unsigned long totalram_pages __read_mostly;
 unsigned long totalhigh_pages __read_mostly;
+/*包含所有活动交换区中可用的（空闲且无缺陷）页槽数目*/
 long nr_swap_pages;
 
 /*
@@ -1112,12 +1113,13 @@ fastcall unsigned long get_zeroed_page(gfp_t gfp_mask)
 }
 
 EXPORT_SYMBOL(get_zeroed_page);
-
+/*通过free_hot_cold_page()释放单页框到per-cpu高速缓存*/
 void __pagevec_free(struct pagevec *pvec)
 {
 	int i = pagevec_count(pvec);
 
 	while (--i >= 0)
+		/*释放一个页框，根据cold来决定释放到per_cpu_pages的哪个数组元素*/
 		free_hot_cold_page(pvec->pages[i], pvec->cold);
 }
 

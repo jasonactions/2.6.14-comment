@@ -36,6 +36,11 @@
 
 /* #define DCACHE_DEBUG 1 */
 
+/*
+ * 可通过/proc/sys/vm/vfs_cache_pressure修改
+ * 小于100：shrink_slab()从目录项高速缓存与索引节点高速缓存回收的页少于从LRU链表回收的页
+ * 大于100：shrink_slab()从目录项高速缓存与索引节点高速缓存回收的页多于从LRU链表回收的页
+ */
 int sysctl_vfs_cache_pressure = 100;
 EXPORT_SYMBOL_GPL(sysctl_vfs_cache_pressure);
 
@@ -71,6 +76,7 @@ struct dentry_stat_t dentry_stat = {
 	.age_limit = 45,
 };
 
+/*rcu回调???将dentry释放给slab分配器*/
 static void d_callback(struct rcu_head *head)
 {
 	struct dentry * dentry = container_of(head, struct dentry, d_rcu);
@@ -84,6 +90,7 @@ static void d_callback(struct rcu_head *head)
  * no dcache_lock, please.  The caller must decrement dentry_stat.nr_dentry
  * inside dcache_lock.
  */
+/*释放dentry*/
 static void d_free(struct dentry *dentry)
 {
 	if (dentry->d_op && dentry->d_op->d_release)
@@ -364,6 +371,7 @@ restart:
  * removed.
  * Called with dcache_lock, drops it and then regains.
  */
+/*释放一个dentry*/
 static inline void prune_one_dentry(struct dentry * dentry)
 {
 	struct dentry * parent;
@@ -373,6 +381,7 @@ static inline void prune_one_dentry(struct dentry * dentry)
 	dentry_stat.nr_dentry--;	/* For d_free, below */
 	dentry_iput(dentry);
 	parent = dentry->d_parent;
+	/*释放dentry*/
 	d_free(dentry);
 	if (parent != dentry)
 		dput(parent);
@@ -391,7 +400,11 @@ static inline void prune_one_dentry(struct dentry * dentry)
  * This function may fail to free any resources if
  * all the dentries are in use.
  */
- 
+/*
+ * 通过扫描dentry_unused未使用dentry链表，释放count个dentry
+ * for循环在获得指定的对象数目dentry或整个链表扫描完毕退出
+ * @count: 要回收的页框数目
+ */ 
 static void prune_dcache(int count)
 {
 	spin_lock(&dcache_lock);
@@ -427,6 +440,7 @@ static void prune_dcache(int count)
  			spin_unlock(&dentry->d_lock);
 			continue;
 		}
+		/*释放一个dentry到slab分配器*/
 		prune_one_dentry(dentry);
 	}
 	spin_unlock(&dcache_lock);
@@ -691,13 +705,19 @@ void shrink_dcache_anon(struct hlist_head *head)
  *
  * In this case we return -1 to tell the caller that we baled.
  */
+/*
+ * 目录项高速缓存的shrink回调,扫描nr个dentries，返回保留的dentries个数
+ * @nr: 要扫描的dentry个数
+ */
 static int shrink_dcache_memory(int nr, gfp_t gfp_mask)
 {
 	if (nr) {
 		if (!(gfp_mask & __GFP_FS))
 			return -1;
+		/*释放nr个dentry*/
 		prune_dcache(nr);
 	}
+	/*返回未用dentry数(sysctl_vfs_cache_pressure为100时)*/
 	return (dentry_stat.nr_unused / 100) * sysctl_vfs_cache_pressure;
 }
 

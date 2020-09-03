@@ -453,7 +453,7 @@ void bd_forget(struct inode *inode)
 		__bd_forget(inode);
 	spin_unlock(&bdev_lock);
 }
-
+/*设置块设备的占有者*/
 int bd_claim(struct block_device *bdev, void *holder)
 {
 	int res;

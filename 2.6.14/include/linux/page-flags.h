@@ -54,6 +54,12 @@
 /*页面被锁定，磁盘IO操作涉及的页*/
 #define PG_locked	 	 0	/* Page is locked. Don't touch. */
 #define PG_error		 1
+/*
+ * 用于页面从非活动链表移入活动链表
+ * 假如一个页位于非活动链表，PG_referenced为0，第一次访问置为1，但仍然在非活动表
+ * 如果第二次访问，发现为1，则移入活动链表，如果第一次访问之后，给定时间未访问，则重置为0
+ * 使用mark_page_accessed()/page_referenced()/refill_inactive_zone()在LRU链表之间移动页
+ */
 #define PG_referenced		 2
 /*页面刚刚被访问过*/
 #define PG_uptodate		 3

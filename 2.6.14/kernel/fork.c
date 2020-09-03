@@ -385,6 +385,7 @@ void mmput(struct mm_struct *mm)
 			list_del(&mm->mmlist);
 			spin_unlock(&mmlist_lock);
 		}
+		/*释放mm的swap token*/
 		put_swap_token(mm);
 		/*递减mm_count,如果为0则释放mm_struct*/
 		mmdrop(mm);

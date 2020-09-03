@@ -347,7 +347,9 @@ struct address_space {
 	struct radix_tree_root	page_tree;	/* radix tree of all pages */
 	rwlock_t		tree_lock;	/* and rwlock protecting it */
 	unsigned int		i_mmap_writable;/* count VM_SHARED mappings */
+	/*优先搜索树的根，每个文件对应一个,可用于映射页的反向查找*/
 	struct prio_tree_root	i_mmap;		/* tree of private and shared mappings */
+	/*给定文件的所有非线性映射线性区描述符组成的链表头*/
 	struct list_head	i_mmap_nonlinear;/*list VM_NONLINEAR mappings */
 	spinlock_t		i_mmap_lock;	/* protect tree, count, list */
 	unsigned int		truncate_count;	/* Cover race condition with truncate */

@@ -120,6 +120,15 @@ void fastcall activate_page(struct page *page)
  * inactive,referenced		->	active,unreferenced
  * active,unreferenced		->	active,referenced
  */
+/*
+ * 在如下几种情况下调用：
+ * 1.当按需装入进程的一个匿名页（do_anonymous_page()执行）;
+ * 2.当按需装入内存映射文件的一个页（filemap_nopage()执行）;
+ * 3.当按需装入IPC共享内存的一个页(shmem_nopage()执行);
+ * 4.当从文件读取数据页（do_generic_file_read()执行）;
+ * 5.当换入一个页时（do_swap_page()执行）;
+ * 6.当在高速缓存中搜索一个页（__find_get_block()执行）
+ */
 void fastcall mark_page_accessed(struct page *page)
 {
 	if (!PageActive(page) && PageReferenced(page) && PageLRU(page)) {
@@ -144,6 +153,10 @@ void fastcall lru_cache_add(struct page *page)
 	struct pagevec *pvec = &get_cpu_var(lru_add_pvecs);
 
 	page_cache_get(page);
+	/*
+	 * 将page先放到pvec，只有达到PAGEVEC_SIZE,才一次放入lru list,
+	 * 这样可以减少持有锁的频率，提升性能
+	 */
 	if (!pagevec_add(pvec, page))
 		__pagevec_lru_add(pvec);
 	put_cpu_var(lru_add_pvecs);
@@ -159,7 +172,7 @@ void fastcall lru_cache_add_active(struct page *page)
 	put_cpu_var(lru_add_active_pvecs);
 }
 
-/*把扔留在pagevec数据结构中的所有页移入活动与非活动链表*/
+/*把仍留在pagevec数据结构中的所有页移入活动与非活动链表*/
 void lru_add_drain(void)
 {
 	struct pagevec *pvec = &get_cpu_var(lru_add_pvecs);
@@ -280,6 +293,7 @@ void __pagevec_release_nonlru(struct pagevec *pvec)
 		if (put_page_testzero(page))
 			pagevec_add(&pages_to_free, page);
 	}
+	/*通过free_hot_cold_page()释放单页框到per-cpu高速缓存*/
 	pagevec_free(&pages_to_free);
 	pagevec_reinit(pvec);
 }
@@ -309,6 +323,7 @@ void __pagevec_lru_add(struct pagevec *pvec)
 	}
 	if (zone)
 		spin_unlock_irq(&zone->lru_lock);
+	/*此处为何要release???*/
 	release_pages(pvec->pages, pvec->nr, pvec->cold);
 	pagevec_reinit(pvec);
 }

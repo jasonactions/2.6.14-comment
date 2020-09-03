@@ -53,7 +53,7 @@ struct per_cpu_pages {
 	int batch;		/* chunk size for buddy add/remove */
 	struct list_head list;	/* the list of pages */
 };
-/*per cpu页框高速缓存,位于zone描述符*/
+/*per cpu页框高速缓存,位于zone描述符,满足本地CPU发出的单一页框请求*/
 struct per_cpu_pageset {
 	/*hot高速缓存存放的页框中包含内容很可能在硬件cache*/
 	struct per_cpu_pages pcp[2];	/* 0: hot.  1: cold */
@@ -161,13 +161,16 @@ struct zone {
 	/* Fields commonly accessed by the page reclaim scanner */
 	/*保护active/inactive链表*/
 	spinlock_t		lru_lock;	
-	/*活动链表,保存最近访问的页*/
+	/*
+	 * 属于用户态地址空间或页高速缓存的所有页分成两组：活动链表和非活动链表
+	 * 活动链表,保存最近访问的页
+	 * 非活动链表，保存有一段时间没有访问的页
+	 */
 	struct list_head	active_list;
-	/*非活动链表，保存有一段时间没有访问的页*/
 	struct list_head	inactive_list;
-	/*回收内存时需要扫描的活动页数*/
+	/*将扫描的活动链表中的页数*/
 	unsigned long		nr_scan_active;
-	/*回收内存时需要扫描的非活动页数*/
+	/*将扫描的非活动链表中的页数*/
 	unsigned long		nr_scan_inactive;
 	/*active链表上的页数*/
 	unsigned long		nr_active;
@@ -203,8 +206,9 @@ struct zone {
 	 * Access to both these fields is quite racy even on uniprocessor.  But
 	 * it is expected to average out OK.
 	 */
-	/*???*/
+	/*扫描当前优先级*/
 	int temp_priority;
+	/*上次执行扫描的优先级*/
 	int prev_priority;
 
 
