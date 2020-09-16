@@ -357,6 +357,7 @@ int kernel_thread(int (*fn)(void *), void * arg, unsigned long flags)
 	regs.eflags = X86_EFLAGS_IF | X86_EFLAGS_SF | X86_EFLAGS_PF | 0x2;
 
 	/* Ok, create the new process.. */
+	/*CLONE_VM表示共享页表*/
 	return do_fork(flags | CLONE_VM | CLONE_UNTRACED, 0, &regs, 0, NULL, NULL);
 }
 EXPORT_SYMBOL(kernel_thread);
@@ -435,11 +436,19 @@ void release_thread(struct task_struct *dead_task)
  * This gets called before we allocate a new thread and copy
  * the current task into it.
  */
+/*把FPU, MMX和SSE/SSE2寄存器的内容保存到父进程的thread_info结构中*/
 void prepare_to_copy(struct task_struct *tsk)
 {
 	unlazy_fpu(tsk);
 }
 
+/*
+ * 用发出clone系统调用时CPU寄存器的值（保存在父进程内核栈中）来初始化子进程的内核栈
+ * 
+ * @clone_flags: CLONE_XXX标志,低字节指定子进程结束时发送到父进程的信号代码，通常选择SIGCHLD
+ *               剩余3字节给clone标志组用于编码                                                                               
+ * @regs: 指向通用寄存器值的指针，通用寄存器的值是在从用户态切换到内核态时被保存到内核态堆栈中的                                                                                
+ */  
 int copy_thread(int nr, unsigned long clone_flags, unsigned long esp,
 	unsigned long unused,
 	struct task_struct * p, struct pt_regs * regs)
@@ -459,20 +468,28 @@ int copy_thread(int nr, unsigned long clone_flags, unsigned long esp,
 	 * "struct pt_regs" is possible, but they may contain the
 	 * completely wrong values.
 	 */
+	/*
+         * 用发出clone系统调用时CPU寄存器的值（保存在父进程内核栈中）来初始化子进程的内核栈
+         * 将父进程用户态的寄存器保存到子进程内核栈，这样在子进程执行时就可以用来恢复现场???
+         */
 	childregs = (struct pt_regs *) ((unsigned long) childregs - 8);
 	*childregs = *regs;
+	/*eax寄存器强制为0(fork()和clone()系统调用作为子进程返回值）*/
 	childregs->eax = 0;
 	childregs->esp = esp;
 
+	/*初始化子进程内核栈的基地址*/
 	p->thread.esp = (unsigned long) childregs;
 	p->thread.esp0 = (unsigned long) (childregs+1);
 
+	/*初始化子进程的PC寄存器*/
 	p->thread.eip = (unsigned long) ret_from_fork;
 
 	savesegment(fs,p->thread.fs);
 	savesegment(gs,p->thread.gs);
 
 	tsk = current;
+	/*如果父进程使用I/O权限位图，则子进程获取该位图的一个拷贝*/
 	if (unlikely(NULL != tsk->thread.io_bitmap_ptr)) {
 		p->thread.io_bitmap_ptr = kmalloc(IO_BITMAP_BYTES, GFP_KERNEL);
 		if (!p->thread.io_bitmap_ptr) {
@@ -486,6 +503,7 @@ int copy_thread(int nr, unsigned long clone_flags, unsigned long esp,
 	/*
 	 * Set a new TLS for the child thread?
 	 */
+	/*如果设置了CLONE_SETTLS，子进程获取由clone()系统调用的参数tls指向的用户态数据结构所表示的TLS段???*/
 	if (clone_flags & CLONE_SETTLS) {
 		struct desc_struct *desc;
 		struct user_desc info;
@@ -664,19 +682,32 @@ static inline void disable_tsc(struct task_struct *prev_p,
  * the task-switch, and shows up in ret_from_fork in entry.S,
  * for example.
  */
+/*
+ * __switch_to主要由switch_to调用
+ * 此处函数以fastcall修饰，告诉编译器前三个参数分别从寄存器eax,edx,ecx中取值，其它参数从栈中取值
+ *
+ * @prev_p：表示前一个将要被切换的进程的进程描述符，由switch_to可知保存在eax寄存器中
+ * @next_p：表示将要切换的下一个进程的进程描述符，由switch_to可知保存在edx寄存器中
+ */
 struct task_struct fastcall * __switch_to(struct task_struct *prev_p, struct task_struct *next_p)
 {
 	struct thread_struct *prev = &prev_p->thread,
 				 *next = &next_p->thread;
+	/*获得当前执行代码的CPU*/
 	int cpu = smp_processor_id();
+	
 	struct tss_struct *tss = &per_cpu(init_tss, cpu);
 
 	/* never put a printk in __switch_to... printk() calls wake_up*() indirectly */
-
+	/*有选择的保存prev_p进程的FPU,MMX及XMM寄存器的内容*/
 	__unlazy_fpu(prev_p);
 
 	/*
 	 * Reload esp0.
+	 */
+	/*
+	 * 将next_p->thread.esp0装入对应于本地CPU的TSS的esp0字段
+	 * 注：任何由sysenter汇编指令产生的从用户态到内核态的特权级转换将把这个地址拷贝到esp寄存器中
 	 */
 	load_esp0(tss, next);
 
@@ -689,11 +720,16 @@ struct task_struct fastcall * __switch_to(struct task_struct *prev_p, struct tas
 	 * NMI handler ever used %fs or %gs (it does not today), or
 	 * if the kernel is running inside of a hypervisor layer.
 	 */
+	/*把fs或gs段寄存器的内容分别存放到prev_p->thread.fs和prev_p->thread.gs中*/
 	savesegment(fs, prev->fs);
 	savesegment(gs, prev->gs);
 
 	/*
 	 * Load the per-thread Thread-Local Storage descriptor.
+	 */
+	/*
+	 * 把next_p进程使用的线程局部存储（TLS）段装入本地CPU的全局描述符表
+	 * 三个段选择符保存在进程描述符内的tls_array数组中
 	 */
 	load_TLS(next, cpu);
 
@@ -703,9 +739,11 @@ struct task_struct fastcall * __switch_to(struct task_struct *prev_p, struct tas
 	 * Glibc normally makes %fs be zero, and %gs is one of
 	 * the TLS segments.
 	 */
+	/*
+	 * 如果fs或gs寄存器被prev或next中任意一个使用，则将next进程的thread_struct描述符中保存的值装入这些寄存器中
+	 */
 	if (unlikely(prev->fs | next->fs))
 		loadsegment(fs, next->fs);
-
 	if (prev->gs | next->gs)
 		loadsegment(gs, next->gs);
 
@@ -718,6 +756,7 @@ struct task_struct fastcall * __switch_to(struct task_struct *prev_p, struct tas
 	/*
 	 * Now maybe reload the debug registers
 	 */
+	/*用next_p->thread->debugreg中内容装载调试寄存器*/
 	if (unlikely(next->debugreg[7])) {
 		set_debugreg(next->debugreg[0], 0);
 		set_debugreg(next->debugreg[1], 1);
@@ -728,11 +767,20 @@ struct task_struct fastcall * __switch_to(struct task_struct *prev_p, struct tas
 		set_debugreg(next->debugreg[7], 7);
 	}
 
+	/*根据需要更新next的io权限位图*/
 	if (unlikely(prev->io_bitmap_ptr || next->io_bitmap_ptr))
 		handle_io_bitmap(next, tss);
 
 	disable_tsc(prev_p, next_p);
 
+	/*
+	 * return prev_p的汇编指令为：
+	 *
+	 * movl %edi,%eax //edi中保存着prev_p,被保存到eax 注：返回值缺省保存在eax,而switch_to会假定eax就是prev_p
+	 * ret            //把栈顶保存的返回地址(next_p->thread.eip)装入eip程序计数器
+	 *
+	 * 注：函数调用过程中函数栈详解 https://blog.csdn.net/u012218309/article/details/81669227
+	 */
 	return prev_p;
 }
 
@@ -741,6 +789,11 @@ asmlinkage int sys_fork(struct pt_regs regs)
 	return do_fork(SIGCHLD, regs.esp, &regs, 0, NULL, NULL);
 }
 
+/*
+ * clone()库函数是通过系统调用clone()->sys_clone()实现
+ * sys_clone()又是通过do_fork()实现
+ * 用于创建轻量级进程,父子进程指向相同的资源
+ */
 asmlinkage int sys_clone(struct pt_regs regs)
 {
 	unsigned long clone_flags;

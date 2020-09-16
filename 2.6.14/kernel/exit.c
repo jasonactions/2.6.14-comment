@@ -63,20 +63,25 @@ void release_task(struct task_struct * p)
 	struct dentry *proc_dentry;
 
 repeat: 
+	/*递减终止进程拥有者的进程个数*/
 	atomic_dec(&p->user->processes);
 	spin_lock(&p->proc_lock);
 	proc_dentry = proc_pid_unhash(p);
 	write_lock_irq(&tasklist_lock);
+	/*如果进程正在被跟踪，将它从调试程序的ptrace_children链表中删除，并让该进程重新属于初始的父进程*/
 	if (unlikely(p->ptrace))
 		__ptrace_unlink(p);
 	BUG_ON(!list_empty(&p->ptrace_list) || !list_empty(&p->ptrace_children));
+	/*删除所有的挂起信号兵释放进程的signal_struct描述符*/
 	__exit_signal(p);
+	/*删除信号处理函数*/
 	__exit_sighand(p);
 	/*
 	 * Note that the fastpath in sys_times depends on __exit_signal having
 	 * updated the counters before a task is removed from the tasklist of
 	 * the process by __unhash_process.
 	 */
+	/*从哈希链表删除进程*/
 	__unhash_process(p);
 
 	/*
@@ -86,8 +91,10 @@ repeat:
 	 */
 	zap_leader = 0;
 	leader = p->group_leader;
+	/*如果线程组的leader线程僵死，且是线程组为空*/
 	if (leader != p && thread_group_empty(leader) && leader->exit_state == EXIT_ZOMBIE) {
 		BUG_ON(leader->exit_signal == -1);
+		/*通知leader线程的父进程*/
 		do_notify_parent(leader, leader->exit_signal);
 		/*
 		 * If we were the last child thread and the leader has
@@ -100,11 +107,13 @@ repeat:
 		zap_leader = (leader->exit_signal == -1);
 	}
 
+	/*调整父进程的时间片*/
 	sched_exit(p);
 	write_unlock_irq(&tasklist_lock);
 	spin_unlock(&p->proc_lock);
 	proc_pid_flush(proc_dentry);
 	release_thread(p);
+	/*如果对p的引用计数为0，则释放进程描述符*/
 	put_task_struct(p);
 
 	p = leader;
@@ -610,6 +619,11 @@ static inline void reparent_thread(task_t *p, task_t *father, int traced)
  * group, and if no such member exists, give it to
  * the global child reaper process (ie "init")
  */
+/*
+ * 更新父进程和子进程的亲属关系
+ * 如果同一线程组中有正在运行的进程，将让终止进程创建的子进程变成同一线程组中另外一个进程的子进程
+ * ，否则将他们成为init的子进程
+ */
 static inline void forget_original_parent(struct task_struct * father,
 					  struct list_head *to_release)
 {
@@ -673,6 +687,7 @@ static inline void forget_original_parent(struct task_struct * father,
  * Send signals to all our closest relatives so that they know
  * to properly mourn us..
  */
+/*通知父进程子进程死亡及托孤*/
 static void exit_notify(struct task_struct *tsk)
 {
 	int state;
@@ -692,6 +707,7 @@ static void exit_notify(struct task_struct *tsk)
 		 */
 		read_lock(&tasklist_lock);
 		spin_lock_irq(&tsk->sighand->siglock);
+		/*遍历线程组的所有线程*/
 		for (t = next_thread(tsk); t != tsk; t = next_thread(t))
 			if (!signal_pending(t) && !(t->flags & PF_EXITING)) {
 				recalc_sigpending_tsk(t);
@@ -714,6 +730,7 @@ static void exit_notify(struct task_struct *tsk)
 	 */
 
 	INIT_LIST_HEAD(&ptrace_dead);
+	/*更新父进程和子进程的亲属关系*/
 	forget_original_parent(tsk, &ptrace_dead);
 	BUG_ON(!list_empty(&tsk->children));
 	BUG_ON(!list_empty(&tsk->ptrace_children));
@@ -765,13 +782,17 @@ static void exit_notify(struct task_struct *tsk)
 	 * send it a SIGCHLD instead of honoring exit_signal.  exit_signal
 	 * only has special meaning to our real parent.
 	 */
+	/*一般进程都满足此条件*/
 	if (tsk->exit_signal != -1 && thread_group_empty(tsk)) {
 		int signal = tsk->parent == tsk->real_parent ? tsk->exit_signal : SIGCHLD;
+		/*向父进程发送信号，以通知父进程子进程死亡*/
 		do_notify_parent(tsk, signal);
 	} else if (tsk->ptrace) {
+		/*父进程是调试程序，向父进程报告子进程死亡*/
 		do_notify_parent(tsk, SIGCHLD);
 	}
 
+	/*设置进程状态为EXIT_ZOMBIE或EXIT_DEAD*/
 	state = EXIT_ZOMBIE;
 	if (tsk->exit_signal == -1 &&
 	    (likely(tsk->ptrace == 0) ||
@@ -788,10 +809,12 @@ static void exit_notify(struct task_struct *tsk)
 	}
 
 	/* If the process is dead, release it - nobody will wait for it */
+	/*回收进程其它数据结构占用的内存，递减进程描述符的使用计数器，计数器变为1，使进程描述符本身正好不被释放*/
 	if (state == EXIT_DEAD)
 		release_task(tsk);
 }
 
+/*执行进程的终止操作，从内核数据结构中删除对终止进程的大部分引用*/
 fastcall NORET_TYPE void do_exit(long code)
 {
 	struct task_struct *tsk = current;
@@ -826,6 +849,7 @@ fastcall NORET_TYPE void do_exit(long code)
 		schedule();
 	}
 
+	/*设置标志，表示进程正在被删除*/
 	tsk->flags |= PF_EXITING;
 
 	/*
@@ -848,10 +872,12 @@ fastcall NORET_TYPE void do_exit(long code)
 	}
 	group_dead = atomic_dec_and_test(&tsk->signal->live);
 	if (group_dead) {
+		/*从动态定时器队列中删除进程描述符*/
  		del_timer_sync(&tsk->signal->real_timer);
 		exit_itimers(tsk->signal);
 		acct_process(code);
 	}
+	/*释放资源*/
 	exit_mm(tsk);
 
 	exit_sem(tsk);
@@ -865,11 +891,14 @@ fastcall NORET_TYPE void do_exit(long code)
 	if (group_dead && tsk->signal->leader)
 		disassociate_ctty(1);
 
+	/*如果被杀死进程的执行域和可执行格式的内核函数包含在内核模块中，则函数递减它们的使用计数器*/
 	module_put(tsk->thread_info->exec_domain->module);
 	if (tsk->binfmt)
 		module_put(tsk->binfmt->module);
 
+	/*设置进程终止代号,正常终止为_exit()/_exit_group()系统调用参数，异常终止为内核提供的一个错误代号*/
 	tsk->exit_code = code;
+	/*通知父进程子进程死亡及托孤*/
 	exit_notify(tsk);
 #ifdef CONFIG_NUMA
 	mpol_free(tsk->mempolicy);
@@ -881,6 +910,7 @@ fastcall NORET_TYPE void do_exit(long code)
 	BUG_ON(tsk->flags & PF_DEAD);
 	tsk->flags |= PF_DEAD;
 
+	/*选择一个新的进程运行*/
 	schedule();
 	BUG();
 	/* Avoid "noreturn function does return".  */
@@ -899,11 +929,13 @@ NORET_TYPE void complete_and_exit(struct completion *comp, long code)
 
 EXPORT_SYMBOL(complete_and_exit);
 
+/*终止一个线程*/
 asmlinkage long sys_exit(int error_code)
 {
 	do_exit((error_code&0xff)<<8);
 }
 
+/*返回进程P位于哈希链表p->pids[PIDTYPE_TGID].pid_list的下一个进程描述符*/
 task_t fastcall *next_thread(const task_t *p)
 {
 	return pid_task(p->pids[PIDTYPE_TGID].pid_list.next, PIDTYPE_TGID);
@@ -920,7 +952,9 @@ do_group_exit(int exit_code)
 {
 	BUG_ON(exit_code & 0x80); /* core dumps don't get here */
 
+	/*如果不为0，说明内核已经开始为线程组执行退出的过程*/
 	if (current->signal->flags & SIGNAL_GROUP_EXIT)
+		/*把current->signal->group_exit_code当做退出码*/
 		exit_code = current->signal->group_exit_code;
 	else if (!thread_group_empty(current)) {
 		struct signal_struct *const sig = current->signal;
@@ -933,6 +967,7 @@ do_group_exit(int exit_code)
 		else {
 			sig->flags = SIGNAL_GROUP_EXIT;
 			sig->group_exit_code = exit_code;
+			/*杀死current线程组的其它线程*/
 			zap_other_threads(current);
 		}
 		spin_unlock_irq(&sighand->siglock);
@@ -948,6 +983,7 @@ do_group_exit(int exit_code)
  * wait4()-ing process will get the correct exit code - even if this
  * thread is not the thread group leader.
  */
+/*终止整个进程组*/
 asmlinkage void sys_exit_group(int error_code)
 {
 	do_group_exit((error_code & 0xff) << 8);

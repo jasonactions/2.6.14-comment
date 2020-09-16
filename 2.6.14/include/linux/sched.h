@@ -42,23 +42,47 @@ struct exec_domain;
 /*
  * cloning flags:
  */
+/*
+ * 低字节指定子进程结束时发送给父进程的信号代码，一般为SIGCHLD信号
+ * 剩余3字节给一clone标志组用于编码
+ */
 #define CSIGNAL		0x000000ff	/* signal mask to be sent at exit */
+ /*共享内存描述符和所有的页表*/ 
 #define CLONE_VM	0x00000100	/* set if VM shared between processes */
+/*共享根目录和当前工作目录*/
 #define CLONE_FS	0x00000200	/* set if fs info shared between processes */
+/*共享打开文件表*/
 #define CLONE_FILES	0x00000400	/* set if open files shared between processes */
+/*共享信号处理程序表、阻塞信号表和挂起信号表*/
 #define CLONE_SIGHAND	0x00000800	/* set if signal handlers and blocked signals shared */
+/*如果父进程被跟踪，子进程也被跟踪*/
 #define CLONE_PTRACE	0x00002000	/* set if we want to let tracing continue on the child too */
+/*vfork系统调用时设置*/
 #define CLONE_VFORK	0x00004000	/* set if the parent wants the child to wake it up on mm_release */
+/*设置子进程的父进程为调用进程的父进程*/
 #define CLONE_PARENT	0x00008000	/* set if we want to have the same parent as the cloner */
+/*把子进程插入到父进程同一线程组中，并迫使子进程共享父进程的信号描述符，此标志为true则必须设置CLONE_SIGHAND*/
 #define CLONE_THREAD	0x00010000	/* Same thread group? */
+/*当clone需要自己的命名空间（即子进程自己的已挂载文件系统视图）时设置这个标志*/
 #define CLONE_NEWNS	0x00020000	/* New namespace group? */
+/*共享System V IPC取消信号量的操作*/
 #define CLONE_SYSVSEM	0x00040000	/* share system V SEM_UNDO semantics */
+/*为轻量级进程创建新的线程局部存储段（TLS），该段由参数tls所指向的结构进行描述*/
 #define CLONE_SETTLS	0x00080000	/* create a new TLS for the child */
+/*把子进程的PID写入父进程由ptid参数指向的用户态变量*/
 #define CLONE_PARENT_SETTID	0x00100000	/* set the TID in the parent */
+/*
+ * 如果该标志被设置，则内核建立一种触发机制，用在子进程要退出或要开始执行新程序时
+ * 这些情况下，内核将消除由参数ctid所指向的用户态变量，并唤醒等待这个事件的任何进程
+ */
 #define CLONE_CHILD_CLEARTID	0x00200000	/* clear the TID in the child */
+/*遗留标志，内核忽略*/
 #define CLONE_DETACHED		0x00400000	/* Unused, ignored */
+/*设置这个标志使得CLONE_PTRACE标志失去作用*/
 #define CLONE_UNTRACED		0x00800000	/* set if the tracing process can't force CLONE_PTRACE on this clone */
+/*把子进程的PID写入由ctid参数所指向的子进程的用户态变量中*/
 #define CLONE_CHILD_SETTID	0x01000000	/* set the TID in the child */
+/*强迫子进程开始于TASK_STOPPED状态*/
 #define CLONE_STOPPED		0x02000000	/* Start in stopped state */
 
 /*
@@ -455,8 +479,10 @@ struct signal_struct {
 	cputime_t it_prof_incr, it_virt_incr;
 
 	/* job control IDs */
+	/*P所在进程组的领头进程*/
 	pid_t pgrp;
 	pid_t tty_old_pgrp;
+	/*P的登陆会话领头进程的PID*/
 	pid_t session;
 	/* boolean value for session group leader */
 	int leader;
@@ -490,6 +516,7 @@ struct signal_struct {
 	 * protect this instead of the siglock, because they really
 	 * have no need to disable irqs.
 	 */
+	/*当前进程的资源限制*/
 	struct rlimit rlim[RLIM_NLIMITS];
 
 	struct list_head cpu_timers[3];
@@ -588,7 +615,9 @@ extern struct file_operations proc_schedstat_operations;
 
 enum idle_type
 {
+	/*CPU当前空闲，current是swapper进程*/
 	SCHED_IDLE,
+	/*CPU当前空闲，current是swapper进程*/
 	NOT_IDLE,
 	NEWLY_IDLE,
 	MAX_IDLE_TYPES
@@ -609,6 +638,7 @@ enum idle_type
 #define SD_WAKE_BALANCE		64	/* Perform balancing at task wakeup */
 #define SD_SHARE_CPUPOWER	128	/* Domain members share cpu power */
 
+/*调度组*/
 struct sched_group {
 	struct sched_group *next;	/* Must be a circular list */
 	cpumask_t cpumask;
@@ -620,9 +650,15 @@ struct sched_group {
 	unsigned long cpu_power;
 };
 
+/*
+ * 调度域，由调度组组成
+ * refs: https://lwn.net/Articles/80911/
+ *       https://www.ibm.com/developerworks/cn/linux/l-cn-schldom/
+ */
 struct sched_domain {
 	/* These fields must be setup */
 	struct sched_domain *parent;	/* top domain must be null terminated */
+	/*指向调度组链表的第一个元素*/
 	struct sched_group *groups;	/* the balancing groups of the domain */
 	cpumask_t span;			/* span of all CPUs in this domain */
 	unsigned long min_interval;	/* Minimum balance interval ms */
@@ -728,7 +764,21 @@ static inline void prefetch_stack(struct task_struct *t) { }
 struct audit_context;		/* See audit.c */
 struct mempolicy;
 
+/*进程描述符*/
 struct task_struct {
+	/*
+	 * 进程的当前状态：
+	 * .TASK_RUNNING
+	 *     进程要么在CPU上执行，要么准备执行
+	 * .TASK_INTERRUPTIBLE
+	 *     进程被挂起，中断、资源满足、传递信号都可以唤醒进程,进程状态修改为TASK_RUNNING
+	 * .TASK_UNINTERRUPTIBLE
+	 *     不能被异步信号打断的挂起状态, 对于不可中断的执行流程会用到这个状态
+	 * .TASK_STOPPED
+	 *     进程的执行被暂停。当进程收到SIGSTOP,SIGTSTP,SIGTTIN,SIGTTOU信号会暂停
+	 * .TASK_TRACED
+	 *     进程的执行已由debugger程序暂停。
+	 */
 	volatile long state;	/* -1 unrunnable, 0 runnable, >0 stopped */
 	struct thread_info *thread_info;
 	atomic_t usage;
@@ -740,19 +790,64 @@ struct task_struct {
 #if defined(CONFIG_SMP) && defined(__ARCH_WANT_UNLOCKED_CTXSW)
 	int oncpu;
 #endif
+	/*
+	 * -static_prio:进程的静态优先级
+	 * (1)NORMAL进程静态优先级
+	 *     用于计算进程的时间片,普通进程（100~139）值越大静态优先级越低
+	 *     新进程继承其父进程的静态优先级,通过nice()/setpriority()系统调用，用户可以改变拥有的进程的静态优先级
+	 *                           / (140-静态优先级) x 20， 静态优先级<120
+	 *     基本时间片（单位ms）= 
+	 *                           \ (140-静态优先级) x 5,   静态优先级>=120
+	 * (2)RR进程的静态优先级
+	 *     基本时间片计算同普通进程
+	 * (3)FIFO进程无静态优先级
+	 *
+	 * -prio:进程的动态优先级
+	 * (1)NORMAL进程动态优先级
+	 *     作为调度器选择合适的进程的依据,普通进程（100~139）值越大静态优先级越低
+	 *
+	 *     动态优先级 = max(100, min(静态优先级 - bonus + 5, 139)), 0 =<bonus<= 10
+	 *     注：bonus大于5表示增加动态优先级奖励；小于5表示减少优先级惩罚
+	 *         bonus依赖于平均睡眠时间（进程在睡眠状态所消耗的平均纳秒数）
+	 * (2)RR进程和FIFO进程动态优先级与它们的实时优先级成线性，不随进程的运行而改变
+	 */
 	int prio, static_prio;
+	/*
+	 * 每个进程优先级都对应一个链表，当前进程将根据优先级不同链入不同的优先级链表
+	 * 如当前进程优先级为k(0~139),将链入优先级为k的可运行进程链表中
+	 * 在多处理器系统中，每个CPU有自己的运行队列(优先级链表集)
+	 */
 	struct list_head run_list;
+	/*指向包含进程的运行队列的集合*/
 	prio_array_t *array;
 
 	unsigned short ioprio;
 
+	/*进程的平均睡眠时间，会影响NORMAL进程的动态优先级*/
 	unsigned long sleep_avg;
+	/*
+	 * timestamp: 导致进程进入睡眠状态的进程切换的时间戳 或 进程最近插入运行队列的时间
+	 * last_ran：最近一次替换本进程的进程切换时间
+	 */
 	unsigned long long timestamp, last_ran;
 	unsigned long long sched_time; /* sched_clock time spent running */
+	/*
+	 * 进程被唤醒时使用的条件代码
+	 * 0:  进程处于TASK_RUNNING状态
+	 * 1:  进程处于TASK_INTERRUPTABLE或TASK_STOPPED状态，而且正在被系统调用服务例程或内核线程唤醒
+	 * 2： 进程处于TASK_INTERRUPTABLE或TASK_STOPPED状态，而且正在被中断处理程序或可延迟函数唤醒
+	 * -1: 进程处于TASK_UNINTERRUPTABLE状态而且正在被唤醒
+	 */
 	int activated;
 
+	/*进程的调度类型（SCHED_NORMAL,SCHED_RR或SCHED_FIFO）*/
 	unsigned long policy;
+	/*能执行进程的CPU位掩码*/
 	cpumask_t cpus_allowed;
+	/*
+	 * time_slice:在进程的时间片中还剩余的时钟节拍数
+	 * first_time_slice: 如果进程肯定不会用完其时间片，就把该标志设置为1
+	 */
 	unsigned int time_slice, first_time_slice;
 
 #ifdef CONFIG_SCHEDSTATS
@@ -764,7 +859,9 @@ struct task_struct {
 	 * ptrace_list/ptrace_children forms the list of my children
 	 * that were stolen by a ptracer.
 	 */
+	/*包含所有被debugger跟踪的P的子进程的链表头*/
 	struct list_head ptrace_children;
+	/*链入P的父进程所有被debugger跟踪的子进程的链表的链接件*/
 	struct list_head ptrace_list;
 
 	/*
@@ -776,36 +873,69 @@ struct task_struct {
 
 /* task state */
 	struct linux_binfmt *binfmt;
+	/*
+	 * 进程的退出状态：
+	 * .EXIT_ZOMBLE
+	 *     进程的执行被终止，但父进程还没有发布wait4()或waitpid()系统调用来返回有关死亡进程的信息,因此进程描述符还没释放
+	 * .EXIT_DEAD
+	 *     由于父进程刚发出wait4()或waitpid()系统调用，因此进程由系统删除。
+	 */
 	long exit_state;
 	int exit_code, exit_signal;
 	int pdeath_signal;  /*  The signal sent when the parent dies  */
 	/* ??? */
 	unsigned long personality;
 	unsigned did_exec:1;
+	/*
+	 * 进程标识符，通常顺序编号,新建进程是前一个进程的PID+1
+	 * 上限为PID_MAX_DEFAULT-1(32位为32767),可通过/proc/sys/kernel/pid_max修改,通过pidmap_array来管理pid
+	 * Linux线程组中的所有线程使用和该线程组领头线程相同的pid
+	 *  
+	 */
 	pid_t pid;
+	/*
+	 * Linux线程组中的所有线程使用和该线程组领头线程相同的pid,也就是该组中第一个进程的pid
+	 * 由getpid()返回当前进程的tgid
+	 */
 	pid_t tgid;
 	/* 
 	 * pointers to (original) parent process, youngest child, younger sibling,
 	 * older sibling, respectively.  (p->father can be replaced with 
 	 * p->parent->pid)
 	 */
+	/*
+	 * 指向创建了P的进程的描述符，如果P的父进程不存在，就指向init(进程1)
+	 * 如：用于运行一个后台进程，且退出了shell,后台进程就会成为init的子进程
+	 */
 	struct task_struct *real_parent; /* real parent process (when being debugged) */
+	/*
+	 * 指向P的当前父进程（这种进程的子进程终止时，必须向父进程发信号）
+	 * 它的值通常与real_parent一致，偶尔不同，如另一个进程发出监控P的ptrace()系统调用 
+	 */
 	struct task_struct *parent;	/* parent process */
 	/*
 	 * children/sibling forms the list of my children plus the
 	 * tasks I'm ptracing.
 	 */
+	/*P的子进程链表头*/
 	struct list_head children;	/* list of my children */
+	/*P链入兄弟进程链表的连接件*/
 	struct list_head sibling;	/* linkage in my parent's children list */
+	/*P所在进程组的领头进程的描述符指针*/
 	struct task_struct *group_leader;	/* threadgroup leader */
 
 	/* PID/PID hash table linkage. */
+	/*用于链入4个不同的pid_hash哈希表,参考pid定义注释*/
 	struct pid pids[PIDTYPE_MAX];
 
 	struct completion *vfork_done;		/* for vfork() */
 	int __user *set_child_tid;		/* CLONE_CHILD_SETTID */
 	int __user *clear_child_tid;		/* CLONE_CHILD_CLEARTID */
 
+	/*
+	 * 实时进程优先级（1~99）
+	 * 用户可以通过sched_setparam()/sched_setscheduler改变进程的实时优先级
+	 */
 	unsigned long rt_priority;
 	cputime_t utime, stime;
 	unsigned long nvcsw, nivcsw; /* context switch counts */
@@ -838,6 +968,7 @@ struct task_struct {
 /* ipc stuff */
 	struct sysv_sem sysvsem;
 /* CPU-specific state of this task */
+	/*用于保存硬件上下文*/
 	struct thread_struct thread;
 /* filesystem information */
 	struct fs_struct *fs;
@@ -930,6 +1061,7 @@ static inline int pid_alive(struct task_struct *p)
 extern void free_task(struct task_struct *tsk);
 extern void __put_task_struct(struct task_struct *tsk);
 #define get_task_struct(tsk) do { atomic_inc(&(tsk)->usage); } while(0)
+/*如果对p的引用计数为0，则释放进程描述符*/
 #define put_task_struct(tsk) \
 do { if (atomic_dec_and_test(&(tsk)->usage)) __put_task_struct(tsk); } while(0)
 

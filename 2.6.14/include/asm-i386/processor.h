@@ -385,6 +385,7 @@ typedef struct {
 
 struct thread_struct;
 
+/*任务段，可用于保存内核态堆栈的地址；保存IO端口的许可权位图*/
 struct tss_struct {
 	unsigned short	back_link,__blh;
 	unsigned long	esp0;
@@ -433,12 +434,14 @@ struct tss_struct {
 
 #define ARCH_MIN_TASKALIGN	16
 
+/*硬件上下文描述符*/
 struct thread_struct {
 /* cached TLS descriptors. */
 	struct desc_struct tls_array[GDT_ENTRY_TLS_ENTRIES];
 	unsigned long	esp0;
 	unsigned long	sysenter_cs;
 	unsigned long	eip;
+	/*内核栈指针*/
 	unsigned long	esp;
 	unsigned long	fs;
 	unsigned long	gs;
